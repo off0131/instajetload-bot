@@ -10,6 +10,8 @@ import urllib.request
 import html
 from typing import Optional, Dict, Any, List
 import yt_dlp
+from hachoir.parser import createParser
+from hachoir.metadata import extractMetadata
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS_DIR = os.path.join(BASE_DIR, "downloads")
@@ -17,7 +19,6 @@ COOKIES_FILE = os.path.join(BASE_DIR, "cookies.txt")
 
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
-# Regex supporting posts (/p/), reels (/reel/ or /reels/), and stories (/stories/user/id/)
 INSTA_URL_REGEX = re.compile(
     r"(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:p|reel|reels|tv|share\/(?:reel|p)|stories\/[^\/\s]+)\/([A-Za-z0-9_-]+)",
     re.IGNORECASE
@@ -28,6 +29,25 @@ def extract_shortcode(url: str) -> Optional[str]:
     if match:
         return match.group(1)
     return None
+
+def get_media_dimensions(file_path: str):
+    """Extract exact width, height, and duration from video or image."""
+    width, height, duration = None, None, None
+    try:
+        parser = createParser(file_path)
+        if parser:
+            with parser:
+                metadata = extractMetadata(parser)
+                if metadata:
+                    if metadata.has("width"):
+                        width = int(metadata.get("width"))
+                    if metadata.has("height"):
+                        height = int(metadata.get("height"))
+                    if metadata.has("duration"):
+                        duration = int(metadata.get("duration").seconds)
+    except Exception as e:
+        print(f"Metadata extraction error for {file_path}: {e}")
+    return width, height, duration
 
 def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
     ydl_opts: Dict[str, Any] = {
@@ -53,7 +73,6 @@ def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
         return {"caption": caption, "shortcode": shortcode}
 
 def _download_with_gallery_dl(url: str, task_dir: str) -> Dict[str, Any]:
-    """Fallback engine using gallery-dl for image posts, carousels, and stories."""
     gallery_dl_bin = os.path.join(BASE_DIR, "venv", "bin", "gallery-dl")
     if not os.path.exists(gallery_dl_bin):
         gallery_dl_bin = "gallery-dl"
@@ -90,53 +109,46 @@ def _download_with_gallery_dl(url: str, task_dir: str) -> Dict[str, Any]:
         print(f"gallery-dl error: {e}")
         return {}
 
-def _download_with_opengraph(url: str, task_dir: str) -> Dict[str, Any]:
-    """Direct scraper mimicking Meta/Facebook crawlers to bypass login on photo posts."""
+def _download_uncropped_photo_and_caption(shortcode: str, url: str, task_dir: str) -> Dict[str, Any]:
+    """Downloads original full-resolution uncropped photo (not the 640x640 square crop) and gets caption."""
+    caption = ""
+    # 1. Fetch caption via OpenGraph metadata
     try:
-        # Clean URL
         clean_url = url.split("?")[0]
-        req = urllib.request.Request(
+        req_og = urllib.request.Request(
             clean_url,
+            headers={"User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"}
+        )
+        with urllib.request.urlopen(req_og, timeout=12) as r_og:
+            page = r_og.read().decode("utf-8")
+        descs = [html.unescape(m) for m in re.findall(r'property="og:description"\s+content="([^"]+)"', page)]
+        if descs:
+            caption = descs[0]
+            if '": "' in caption:
+                caption = caption.split('": "', 1)[1].rstrip('"\u200e .')
+    except Exception as e:
+        print(f"Caption fetch error: {e}")
+
+    # 2. Download original uncropped image (size=l gives full original aspect ratio 1080p, not square)
+    try:
+        direct_url = f"https://www.instagram.com/p/{shortcode}/media/?size=l"
+        req = urllib.request.Request(
+            direct_url,
             headers={
-                "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-                "Accept-Language": "en-US,en;q=0.9",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
         )
-        with urllib.request.urlopen(req, timeout=15) as r:
-            page = r.read().decode("utf-8")
-
-        images = [html.unescape(m) for m in re.findall(r'property="og:image"\s+content="([^"]+)"', page)]
-        videos = [html.unescape(m) for m in re.findall(r'property="og:video(?::secure_url)?"\s+content="([^"]+)"', page)]
-        descs = [html.unescape(m) for m in re.findall(r'property="og:description"\s+content="([^"]+)"', page)]
-
-        caption = descs[0] if descs else ""
-        # Clean caption from "X likes, Y comments - User on Date: " prefix if present
-        if '": "' in caption:
-            caption = caption.split('": "', 1)[1].rstrip('"\u200e .')
-
-        # Download media
-        downloaded = False
-        if videos:
-            target_path = os.path.join(task_dir, "00_video.mp4")
-            req_v = urllib.request.Request(videos[0], headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req_v, timeout=30) as r_v:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read()
+            if len(data) > 5000:
+                target_path = os.path.join(task_dir, "00_original_photo.jpg")
                 with open(target_path, "wb") as f_out:
-                    f_out.write(r_v.read())
-            downloaded = True
-
-        if not downloaded and images:
-            target_path = os.path.join(task_dir, "00_photo.jpg")
-            req_img = urllib.request.Request(images[0], headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req_img, timeout=20) as r_img:
-                with open(target_path, "wb") as f_out:
-                    f_out.write(r_img.read())
-            downloaded = True
-
-        if downloaded:
-            return {"caption": caption}
+                    f_out.write(data)
+                return {"caption": caption}
     except Exception as e:
-        print(f"opengraph scraper error: {e}")
-    return {}
+        print(f"Direct uncropped size=l download error: {e}")
+
+    return {"caption": caption}
 
 def _download_sync(url: str) -> Dict[str, Any]:
     task_id = str(uuid.uuid4())
@@ -156,7 +168,7 @@ def _download_sync(url: str) -> Dict[str, Any]:
             and not f.endswith(".json")
         ]
 
-    # 1. First attempt: yt-dlp (fastest for reels and video posts)
+    # 1. First attempt: yt-dlp (downloads original video stream in native resolution)
     try:
         ytdl_res = _download_with_ytdlp(url, task_dir)
         caption = ytdl_res.get("caption", "")
@@ -167,18 +179,18 @@ def _download_sync(url: str) -> Dict[str, Any]:
 
     downloaded_files = get_valid_files()
 
-    # 2. Second attempt: gallery-dl (photos, carousels, and stories with cookies)
+    # 2. Second attempt: gallery-dl (multi-slide carousels and stories with cookies)
     if not downloaded_files:
         gdl_res = _download_with_gallery_dl(url, task_dir)
         if not caption:
             caption = gdl_res.get("caption", "")
         downloaded_files = get_valid_files()
 
-    # 3. Third attempt: OpenGraph scraper (bypasses login for single photo/video posts)
-    if not downloaded_files:
-        og_res = _download_with_opengraph(url, task_dir)
+    # 3. Third attempt: Uncropped full-resolution photo scraper
+    if not downloaded_files and shortcode:
+        photo_res = _download_uncropped_photo_and_caption(shortcode, url, task_dir)
         if not caption:
-            caption = og_res.get("caption", "")
+            caption = photo_res.get("caption", "")
         downloaded_files = get_valid_files()
 
     if not downloaded_files:
@@ -188,7 +200,7 @@ def _download_sync(url: str) -> Dict[str, Any]:
 
     downloaded_files.sort()
 
-    items: List[Dict[str, str]] = []
+    items: List[Dict[str, Any]] = []
     for file_path in downloaded_files:
         ext = os.path.splitext(file_path)[1].lower()
         if ext in [".mp4", ".mov", ".mkv", ".webm"]:
@@ -198,9 +210,15 @@ def _download_sync(url: str) -> Dict[str, Any]:
         else:
             media_type = "document"
 
+        # Extract precise dimensions and duration
+        w, h, dur = get_media_dimensions(file_path)
+
         items.append({
             "type": media_type,
-            "path": file_path
+            "path": file_path,
+            "width": w,
+            "height": h,
+            "duration": dur,
         })
 
     return {

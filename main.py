@@ -174,7 +174,14 @@ async def handle_instagram_link(message: types.Message):
                 if len(media_items) == 1:
                     item = media_items[0]
                     if item["type"] == "video":
-                        await message.reply_video(video=item["file_id"], caption=caption_text)
+                        await message.reply_video(
+                            video=item["file_id"],
+                            caption=caption_text,
+                            width=item.get("width"),
+                            height=item.get("height"),
+                            duration=item.get("duration"),
+                            supports_streaming=True
+                        )
                     else:
                         await message.reply_photo(photo=item["file_id"], caption=caption_text)
                 elif len(media_items) > 1:
@@ -182,7 +189,14 @@ async def handle_instagram_link(message: types.Message):
                     for idx, itm in enumerate(media_items[:10]):
                         c = caption_text if idx == 0 else None
                         if itm["type"] == "video":
-                            media_group.append(InputMediaVideo(media=itm["file_id"], caption=c))
+                            media_group.append(InputMediaVideo(
+                                media=itm["file_id"],
+                                caption=c,
+                                width=itm.get("width"),
+                                height=itm.get("height"),
+                                duration=itm.get("duration"),
+                                supports_streaming=True
+                            ))
                         else:
                             media_group.append(InputMediaPhoto(media=itm["file_id"], caption=c))
                     await message.reply_media_group(media=media_group)
@@ -213,9 +227,22 @@ async def handle_instagram_link(message: types.Message):
             item = items[0]
             file_input = FSInputFile(item["path"])
             if item["type"] == "video":
-                sent = await message.reply_video(video=file_input, caption=formatted_caption)
+                sent = await message.reply_video(
+                    video=file_input,
+                    caption=formatted_caption,
+                    width=item.get("width"),
+                    height=item.get("height"),
+                    duration=item.get("duration"),
+                    supports_streaming=True
+                )
                 if sent.video:
-                    saved_file_ids.append({"type": "video", "file_id": sent.video.file_id})
+                    saved_file_ids.append({
+                        "type": "video",
+                        "file_id": sent.video.file_id,
+                        "width": item.get("width"),
+                        "height": item.get("height"),
+                        "duration": item.get("duration")
+                    })
             elif item["type"] == "photo":
                 sent = await message.reply_photo(photo=file_input, caption=formatted_caption)
                 if sent.photo:
@@ -234,14 +261,28 @@ async def handle_instagram_link(message: types.Message):
                     f_input = FSInputFile(itm["path"])
                     c = formatted_caption if (b_idx == 0 and idx == 0) else None
                     if itm["type"] == "video":
-                        media_group.append(InputMediaVideo(media=f_input, caption=c))
+                        media_group.append(InputMediaVideo(
+                            media=f_input,
+                            caption=c,
+                            width=itm.get("width"),
+                            height=itm.get("height"),
+                            duration=itm.get("duration"),
+                            supports_streaming=True
+                        ))
                     else:
                         media_group.append(InputMediaPhoto(media=f_input, caption=c))
 
                 sent_msgs = await message.reply_media_group(media=media_group)
-                for s_msg in sent_msgs:
+                for idx, s_msg in enumerate(sent_msgs):
+                    orig_item = batch[idx] if idx < len(batch) else {}
                     if s_msg.video:
-                        saved_file_ids.append({"type": "video", "file_id": s_msg.video.file_id})
+                        saved_file_ids.append({
+                            "type": "video",
+                            "file_id": s_msg.video.file_id,
+                            "width": orig_item.get("width"),
+                            "height": orig_item.get("height"),
+                            "duration": orig_item.get("duration")
+                        })
                     elif s_msg.photo:
                         saved_file_ids.append({"type": "photo", "file_id": s_msg.photo[-1].file_id})
 
