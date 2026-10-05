@@ -362,11 +362,27 @@ async def set_bot_commands():
     except Exception as e:
         logger.warning(f"Could not set commands menu: {e}")
 
+async def self_keep_alive():
+    url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("SELF_PING_URL")
+    if not url:
+        return
+    logger.info(f"Self-ping keepalive engine started for: {url}")
+    await asyncio.sleep(60)
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{url.rstrip('/')}/health", timeout=15) as resp:
+                    logger.info(f"Keepalive ping response: {resp.status}")
+        except Exception as e:
+            logger.warning(f"Keepalive ping note: {e}")
+        await asyncio.sleep(480)
+
 async def main():
     await init_db()
     logger.info("Database initialized successfully.")
     await start_web_server()
     await set_bot_commands()
+    asyncio.create_task(self_keep_alive())
     logger.info("Bot is starting polling...")
     # Skip any accumulated old updates
     await bot.delete_webhook(drop_pending_updates=True)
