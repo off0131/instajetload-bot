@@ -362,20 +362,44 @@ async def set_bot_commands():
     except Exception as e:
         logger.warning(f"Could not set commands menu: {e}")
 
+import math
+import random
+
 async def self_keep_alive():
     url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("SELF_PING_URL")
     if not url:
         return
-    logger.info(f"Self-ping keepalive engine started for: {url}")
-    await asyncio.sleep(60)
+    logger.info(f"Human-mimic sinusoidal keepalive engine started for: {url}")
+    await asyncio.sleep(45)
+
+    step = 0.0
+    user_agents = [
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.6613.127 Mobile Safari/537.36",
+    ]
+
     while True:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{url.rstrip('/')}/health", timeout=15) as resp:
+            headers = {
+                "User-Agent": random.choice(user_agents),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(f"{url.rstrip('/')}/health", timeout=20) as resp:
                     logger.info(f"Keepalive ping response: {resp.status}")
         except Exception as e:
             logger.warning(f"Keepalive ping note: {e}")
-        await asyncio.sleep(480)
+
+        # Sinusoidal interval calculation:
+        # Base oscillates smoothly between 240s (4 min) and 600s (10 min) like a natural wave
+        # plus random jitter (+- 35s) so the pattern is never mechanical or predictable
+        sine_factor = (math.sin(step) + 1.0) / 2.0  # 0.0 to 1.0
+        interval = 240 + (sine_factor * 360) + random.uniform(-35, 35)
+        step += 0.35  # Advance wave phase
+        await asyncio.sleep(max(180, interval))
 
 async def main():
     await init_db()
