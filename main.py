@@ -13,6 +13,8 @@ from aiogram.types import (
     FSInputFile,
     InputMediaPhoto,
     InputMediaVideo,
+    BotCommand,
+    BotCommandScopeDefault,
 )
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -94,12 +96,32 @@ async def cb_help(callback: types.CallbackQuery):
     await callback.message.answer(help_text)
     await callback.answer()
 
+@dp.message(Command("about"))
+async def handle_cmd_about(message: types.Message):
+    about_text = (
+        "<b>ℹ️ درباره InstaJetLoad Bot:</b>\n\n"
+        "ربات پرسرعت و رایگان جهت دانلود آسان و مستقیم ویدیوها، تصاویر، ریلز و آلبوم‌ها از اینستاگرام.\n"
+        "طراحی شده با فریم‌ورک قدرتمند <code>aiogram 3</code> و موتور اختصاصی دانلود."
+    )
+    await message.answer(about_text)
+
+@dp.message(Command("stats"))
+async def handle_cmd_stats(message: types.Message):
+    stats = await get_stats()
+    text = (
+        "<b>📊 آمار عملکرد ربات:</b>\n\n"
+        f"👥 تعداد کاربران: <b>{stats['users']}</b> نفر\n"
+        f"📥 کل دانلودها: <b>{stats['downloads']}</b> بار\n"
+        f"⚡️ فایل‌های ذخیره شده در کش: <b>{stats['cached']}</b> عدد"
+    )
+    await message.answer(text)
+
 @dp.callback_query(F.data == "about")
 async def cb_about(callback: types.CallbackQuery):
     about_text = (
         "<b>ℹ️ درباره InstaJetLoad Bot:</b>\n\n"
-        "ربات پرسرعت و رایگان جهت دانلود آسان و مستقیم ویدیوها و تصاویر از اینستاگرام.\n"
-        "طراحی شده با فریم‌ورک قدرتمند <code>aiogram</code> و هسته <code>yt-dlp</code>."
+        "ربات پرسرعت و رایگان جهت دانلود آسان و مستقیم ویدیوها، تصاویر، ریلز و آلبوم‌ها از اینستاگرام.\n"
+        "طراحی شده با فریم‌ورک قدرتمند <code>aiogram 3</code> و موتور اختصاصی دانلود."
     )
     await callback.message.answer(about_text)
     await callback.answer()
@@ -286,10 +308,24 @@ async def start_web_server():
     await site.start()
     logger.info(f"Healthcheck web server running on 0.0.0.0:{port}")
 
+async def set_bot_commands():
+    try:
+        commands = [
+            BotCommand(command="start", description="🚀 شروع و منوی اصلی"),
+            BotCommand(command="help", description="📖 راهنمای دانلود"),
+            BotCommand(command="stats", description="📊 آمار عملکرد ربات"),
+            BotCommand(command="about", description="ℹ️ درباره ربات"),
+        ]
+        await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+        logger.info("Bot commands menu set successfully in Telegram.")
+    except Exception as e:
+        logger.warning(f"Could not set commands menu: {e}")
+
 async def main():
     await init_db()
     logger.info("Database initialized successfully.")
     await start_web_server()
+    await set_bot_commands()
     logger.info("Bot is starting polling...")
     # Skip any accumulated old updates
     await bot.delete_webhook(drop_pending_updates=True)
