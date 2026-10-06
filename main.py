@@ -316,6 +316,7 @@ async def health_check_handler(request):
             <p>Telegram Bot: <a href="https://t.me/instajetloadbot" style="color: #38bdf8;">@instajetloadbot</a></p>
             <p>Users: {stats['users']} | Downloads: {stats['downloads']}</p>
             <p style="color: #4ade80;">Status: Healthy & Active</p>
+            <p style="color: #94a3b8; font-size: 13px;">Version: v2.2-friendly-emoji | Branch: master</p>
         </body>
     </html>
     """
