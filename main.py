@@ -142,9 +142,16 @@ async def handle_instagram_link(message: types.Message):
     if shortcode:
         cached = await get_cached(shortcode)
         if cached:
-            try:
-                media_items = cached.get("file_ids", [])
-                caption_text = truncate_caption(cached.get("caption", ""))
+            media_items = cached.get("file_ids", [])
+            has_bad_video = any(
+                i.get("type") == "video" and (not i.get("duration") or i.get("duration") <= 2)
+                for i in media_items
+            )
+            if has_bad_video:
+                logger.info(f"Cached video for {shortcode} is corrupt/short, re-downloading freshly.")
+            else:
+                try:
+                    caption_text = truncate_caption(cached.get("caption", ""))
 
                 if len(media_items) == 1:
                     item = media_items[0]

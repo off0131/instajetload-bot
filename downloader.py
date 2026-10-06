@@ -20,6 +20,27 @@ COOKIES_FILE = os.path.join(BASE_DIR, "cookies.txt")
 
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
+def setup_ffmpeg():
+    """Ensure ffmpeg binary from imageio_ffmpeg is named 'ffmpeg' and added to PATH."""
+    try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if ffmpeg_exe and os.path.exists(ffmpeg_exe):
+            ffmpeg_dir = os.path.dirname(ffmpeg_exe)
+            ffmpeg_link = os.path.join(ffmpeg_dir, "ffmpeg")
+            if not os.path.exists(ffmpeg_link):
+                try:
+                    os.symlink(ffmpeg_exe, ffmpeg_link)
+                except Exception:
+                    pass
+            current_path = os.environ.get("PATH", "")
+            if ffmpeg_dir not in current_path:
+                os.environ["PATH"] = ffmpeg_dir + os.pathsep + current_path
+    except Exception as e:
+        print(f"setup_ffmpeg error: {e}")
+
+setup_ffmpeg()
+
 def ensure_cookies_file() -> Optional[str]:
     """Ensures cookies file is ready from Render Secret Files, Env Var, or local file."""
     render_secrets_path = "/etc/secrets/cookies.txt"
