@@ -7,6 +7,7 @@ import glob
 import subprocess
 import json
 import urllib.request
+import urllib.parse
 import html
 from typing import Optional, Dict, Any, List
 import yt_dlp
@@ -109,9 +110,58 @@ def _download_with_gallery_dl(url: str, task_dir: str) -> Dict[str, Any]:
         print(f"gallery-dl error: {e}")
         return {}
 
+def _download_via_embed_scraper(shortcode: str, url: str, task_dir: str) -> Dict[str, Any]:
+    """Extracts direct mp4 video or full images by parsing Instagram embed endpoint without login."""
+    caption = ""
+    embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
+    req = urllib.request.Request(
+        embed_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            content = resp.read().decode("utf-8", errors="ignore")
+
+        # 1. Extract caption if available
+        caption_match = re.search(r'class="Caption"[^>]*>(.*?)</div>', content, re.DOTALL)
+        if caption_match:
+            raw_c = re.sub(r'<[^>]+>', '', caption_match.group(1))
+            caption = html.unescape(raw_c).strip()
+
+        # 2. Extract video URL if post is a video / reel
+        vid_key = "video_url"
+        idx = content.find(vid_key)
+        if idx != -1:
+            http_idx = content.find("https:", idx)
+            mp4_idx = content.find(".mp4", http_idx) if http_idx != -1 else -1
+            if http_idx != -1 and mp4_idx != -1:
+                end_idx = mp4_idx
+                while end_idx < len(content) and content[end_idx] not in ('"', '\\', "'", ' '):
+                    end_idx += 1
+                raw_url = content[http_idx:end_idx]
+                clean_url = raw_url.replace(r'\\\\/', '/').replace(r'\\/', '/').replace(r'\u0025', '%').replace(r'\u0026', '&')
+                
+                # Download video file
+                video_req = urllib.request.Request(clean_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(video_req, timeout=40) as v_resp:
+                    v_data = v_resp.read()
+                    if len(v_data) > 10000:
+                        v_path = os.path.join(task_dir, f"{shortcode}.mp4")
+                        with open(v_path, "wb") as f_out:
+                            f_out.write(v_data)
+                        return {"caption": caption}
+    except Exception as e:
+        print(f"Embed scraper error for {shortcode}: {e}")
+
+    return {"caption": caption}
+
 def _download_uncropped_photo_and_caption(shortcode: str, url: str, task_dir: str) -> Dict[str, Any]:
     """Downloads original full-resolution uncropped photo (not the 640x640 square crop) and gets caption."""
-    # Never scrape a Reel or Video link as a photo!
     if "/reel/" in url.lower() or "/reels/" in url.lower():
         return {}
 
@@ -175,7 +225,7 @@ def _download_sync(url: str) -> Dict[str, Any]:
             and not f.endswith(".json")
         ]
 
-    # 1. First attempt: yt-dlp (downloads original video stream in native resolution)
+    # 1. First attempt: yt-dlp (fastest for native streams)
     try:
         ytdl_res = _download_with_ytdlp(url, task_dir)
         caption = ytdl_res.get("caption", "")
@@ -186,16 +236,25 @@ def _download_sync(url: str) -> Dict[str, Any]:
 
     downloaded_files = get_valid_files()
 
-    # 2. Second attempt: gallery-dl (multi-slide carousels and stories with cookies)
+    # 2. Second attempt: Instagram Embed Scraper (100% bypasses login for public reels and videos)
+    if not downloaded_files and shortcode:
+        try:
+            embed_res = _download_via_embed_scraper(shortcode, url, task_dir)
+            if not caption:
+                caption = embed_res.get("caption", "")
+            downloaded_files = get_valid_files()
+        except Exception as e:
+            print(f"embed attempt note: {e}")
+
+    # 3. Third attempt: gallery-dl (multi-slide carousels and stories)
     if not downloaded_files:
         gdl_res = _download_with_gallery_dl(url, task_dir)
         if not caption:
             caption = gdl_res.get("caption", "")
         downloaded_files = get_valid_files()
 
-    # 3. Third attempt: Uncropped full-resolution photo scraper
+    # 4. Fourth attempt: Uncropped full-resolution photo scraper
     if not downloaded_files and shortcode:
-        # If it was explicitly a /reel/ link, don't download a photo!
         if "/reel/" not in url.lower() and "/reels/" not in url.lower():
             photo_res = _download_uncropped_photo_and_caption(shortcode, url, task_dir)
             if not caption:
