@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import html
 from typing import List
 
 from dotenv import load_dotenv
@@ -115,12 +116,24 @@ async def handle_cmd_stats(message: types.Message):
 
 INSTA_PATTERN = re.compile(r"https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/\S+", re.IGNORECASE)
 
-def truncate_caption(caption: str, max_length: int = 1000) -> str:
-    if not caption:
-        return ""
-    if len(caption) <= max_length:
-        return caption
-    return caption[:max_length] + "...\n\n<i>(کپشن به دلیل محدودیت طول خلاصه شد)</i>"
+def format_caption(caption: str, max_length: int = 850) -> str:
+    bot_tag = "\n\n🆔 @instajetloadbot"
+    if not caption or not caption.strip():
+        return "🆔 @instajetloadbot"
+
+    clean = caption.strip()
+    if len(clean) > max_length:
+        clean = clean[:max_length].rstrip() + "..."
+
+    escaped = html.escape(clean)
+    # Ensure total HTML caption length stays strictly below Telegram limit (1024 chars)
+    while len(f"<blockquote expandable><code>{escaped}</code></blockquote>{bot_tag}") > 1020 and len(clean) > 50:
+        clean = clean[:-20].rstrip() + "..."
+        escaped = html.escape(clean)
+
+    return f"<blockquote expandable><code>{escaped}</code></blockquote>{bot_tag}"
+
+truncate_caption = format_caption
 
 @dp.message(F.text.regexp(INSTA_PATTERN))
 async def handle_instagram_link(message: types.Message):
