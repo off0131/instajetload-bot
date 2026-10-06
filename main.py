@@ -5,6 +5,7 @@ import re
 import html
 from typing import List
 
+import aiohttp
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
@@ -16,12 +17,22 @@ from aiogram.types import (
     InputMediaVideo,
     BotCommand,
     BotCommandScopeDefault,
+    BotCommandScopeChat,
 )
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.client.default import DefaultBotProperties
 
 from database import init_db, add_or_update_user, get_cached, save_cache, log_download, get_stats
-from downloader import download_instagram_media, cleanup_task_dir, extract_shortcode
+from downloader import (
+    download_instagram_media,
+    cleanup_task_dir,
+    extract_shortcode,
+    detect_platform,
+    get_youtube_info,
+    download_youtube,
+    download_spotify,
+    download_generic,
+)
 
 # Load environment variables
 load_dotenv()
@@ -53,11 +64,11 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="⚡️ وضعیت سرعت ربات", callback_data="ping"),
-                InlineKeyboardButton(text="💡 نکات دانلود سریع", callback_data="tips"),
+                InlineKeyboardButton(text="⚡️ وضعیت سرور", callback_data="ping"),
+                InlineKeyboardButton(text="💡 راهنما و نکات", callback_data="tips"),
             ],
             [
-                InlineKeyboardButton(text="🚀 معرفی به دوستان", switch_inline_query="بهترین ربات دانلود سریع از اینستاگرام: @instajetloadbot 🔥"),
+                InlineKeyboardButton(text="🚀 معرفی به دوستان", switch_inline_query="ربات دانلود سریع و همه‌کاره از اینستاگرام، یوتیوب و اسپاتیفای: @instajetloadbot 🔥"),
             ]
         ]
     )
@@ -71,14 +82,17 @@ async def handle_start(message: types.Message):
     name = user.first_name if user else "دوست من"
     welcome_text = (
         f"سلام {name} عزیز! خیلی خوش اومدی 🤩❤️✨\n\n"
-        "من اینجام تا هرچیزی از اینستاگرام خواستی رو با <b>بالاترین کیفیت و سرعت برق‌آسا</b> برات دانلود کنم ⚡️🎯\n\n"
-        "🔥 <b>چی برات دانلود می‌کنم؟</b>\n"
-        "▫️ <b>ریلز (Reels):</b> کیفیت اصلی بدون افت فریم 🎬\n"
-        "▫️ <b>عکس‌ها:</b> وضوح شفاف و کامل بدون کات شدن 📸\n"
-        "▫️ <b>آلبوم‌ها و اسلایدها:</b> تمام عکس‌ها و فیلم‌ها باهم 🗂\n"
-        "▫️ <b>متن کپشن:</b> همراه با ایموجی‌ها و هشتگ‌ها ✍️\n\n"
+        "من ربات همه‌کاره‌ی <b>InstaJetLoad</b> هستم؛ هر لینکی برام بفرستی با <b>بالاترین کیفیت و سرعت جت</b> برات دانلود می‌کنم ⚡️🎯\n\n"
+        "🔥 <b>پلتفرم‌های پشتیبانی‌شده:</b>\n"
+        "▫️ <b>اینستاگرام (Instagram):</b> ریلز، پست، عکس با کیفیت اصلی و بدون افت فریم 🎬\n"
+        "▫️ <b>یوتیوب (YouTube):</b> با انتخاب کیفیت دلخواه (1080p, 720p, 480p) یا فایل صوتی MP3 📺\n"
+        "▫️ <b>اسپاتیفای (Spotify):</b> دانلود مستقیم موزیک با بالاترین کیفیت (320kbps) 🎧\n"
+        "▫️ <b>ساندکلاد (SoundCloud):</b> دانلود آهنگ با کیفیت بالا 🎵\n"
+        "▫️ <b>تیک‌تاک (TikTok):</b> ویدیو بدون واترمرک 🚀\n"
+        "▫️ <b>توییتر / اکس (Twitter / X) و پینترست (Pinterest)</b> 📌\n"
+        "▫️ <b>متن کپشن:</b> با یک کلیک کپی کن همراه با هشتگ‌ها ✍️\n\n"
         "👇 <b>همین الان امتحانش کن:</b>\n"
-        "فقط کافیه لینک پست یا ریلز رو برام بفرستی تا در چند ثانیه تحویلت بدم! 😉🚀"
+        "فقط کافیه لینک مورد نظرت رو برام بفرستی! 😉🚀"
     )
     await message.answer(welcome_text, reply_markup=get_main_keyboard())
 
@@ -89,10 +103,11 @@ async def cb_ping(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "tips")
 async def cb_tips(callback: types.CallbackQuery):
     tips_text = (
-        "💡 <b>چندتا نکته خودمانی برای دانلود راحت‌تر:</b> ✨\n\n"
-        "۱. برای کپی کردن لینک، زیر هر ریلز یا پست دکمه <b>Share (فلش یا موشک کاغذی)</b> رو بزن و <b>Copy link</b> رو انتخاب کن 📲\n\n"
-        "۲. پیج حتماً باید عمومی (Public) باشه تا محتواش بدون معطلی دانلود بشه 🔓\n\n"
-        "۳. اگه ویدیویی رو قبلاً کسی دانلود کرده باشه، ربات اون رو آنی و در کمتر از یک ثانیه برات می‌فرسته! ⚡️"
+        "💡 <b>چندتا نکته خودمانی برای استفاده راحت‌تر:</b> ✨\n\n"
+        "۱. <b>اینستاگرام:</b> دکمه Share زیر ریلز یا پست رو بزن و Copy link رو انتخاب کن 📲\n\n"
+        "۲. <b>یوتیوب:</b> هر لینکی بفرستی، کیفیت‌های مختلف (1080p, 720p, ...) به همراه نسخه صوتی MP3 بهت پیشنهاد داده میشه 📺\n\n"
+        "۳. <b>اسپاتیفای و ساندکلاد:</b> لینک موزیک رو بفرست تا فایل صوتی کامل با بالاترین کیفیت برات ارسال بشه 🎧\n\n"
+        "۴. <b>کش هوشمند:</b> فایل‌هایی که قبلاً دانلود شدن، آنی و در کمتر از یک ثانیه تحویلت داده میشن! ⚡️"
     )
     await callback.message.answer(tips_text)
     await callback.answer()
@@ -114,7 +129,7 @@ async def handle_cmd_stats(message: types.Message):
     )
     await message.answer(text)
 
-INSTA_PATTERN = re.compile(r"https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/\S+", re.IGNORECASE)
+GENERAL_URL_PATTERN = re.compile(r"https?:\/\/\S+", re.IGNORECASE)
 
 def format_caption(caption: str, max_length: int = 850) -> str:
     bot_tag = "\n\n🆔 @instajetloadbot"
@@ -135,17 +150,8 @@ def format_caption(caption: str, max_length: int = 850) -> str:
 
 truncate_caption = format_caption
 
-@dp.message(F.text.regexp(INSTA_PATTERN))
-async def handle_instagram_link(message: types.Message):
+async def process_instagram_url(message: types.Message, url: str):
     user = message.from_user
-    if user:
-        await add_or_update_user(user.id, user.username or "", user.first_name or "")
-
-    url_match = INSTA_PATTERN.search(message.text)
-    if not url_match:
-        return
-
-    url = url_match.group(0).strip()
     shortcode = extract_shortcode(url)
 
     status_msg = await message.reply("⚡️ دریافت شد! در حال دانلود با بالاترین کیفیت... لطفاً چند ثانیه صبر کن رفیق ⏳🏎")
@@ -248,7 +254,6 @@ async def handle_instagram_link(message: types.Message):
                     saved_file_ids.append({"type": "document", "file_id": sent.document.file_id})
         else:
             # Multi-slide album / Carousel
-            # Telegram supports max 10 per media group
             batches = [items[i:i + 10] for i in range(0, len(items), 10)]
             for b_idx, batch in enumerate(batches):
                 media_group = []
@@ -281,7 +286,6 @@ async def handle_instagram_link(message: types.Message):
                     elif s_msg.photo:
                         saved_file_ids.append({"type": "photo", "file_id": s_msg.photo[-1].file_id})
 
-        # Save to database cache
         if saved_file_ids and sc:
             await save_cache(sc, "album" if len(items) > 1 else items[0]["type"], saved_file_ids, caption)
 
@@ -307,21 +311,222 @@ async def handle_instagram_link(message: types.Message):
                 "اینستاگرام موقتاً پاسخی نداد یا ترافیک این بخش زیاده 🙁\n"
                 "چند لحظه بعد دوباره لینکش رو بفرست تا تلاشمو بکنم! 🔄❤️"
             )
-
         await status_msg.edit_text(text)
-
     finally:
         if task_dir:
             cleanup_task_dir(task_dir)
+
+async def process_youtube_url(message: types.Message, url: str):
+    status_msg = await message.reply("⚡️ در حال دریافت اطلاعات ویدیو از یوتیوب... ⏳")
+    try:
+        info = await get_youtube_info(url)
+        video_id = info["id"]
+        title = info.get("title", "ویدیو یوتیوب")
+        duration = info.get("duration", 0)
+        dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "نامشخص"
+        channel = info.get("channel", "یوتیوب")
+        resolutions = info.get("resolutions") or [720, 480, 360]
+
+        # Build inline keyboard for quality selection
+        quality_buttons = []
+        row = []
+        for r in resolutions[:4]:
+            row.append(InlineKeyboardButton(text=f"🎬 {r}p", callback_data=f"yt:{video_id}:{r}"))
+        if row:
+            quality_buttons.append(row)
+
+        quality_buttons.append([
+            InlineKeyboardButton(text="🎵 دانلود صوتی (MP3)", callback_data=f"yt:{video_id}:audio")
+        ])
+        quality_buttons.append([
+            InlineKeyboardButton(text="❌ انصراف", callback_data="yt:cancel")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=quality_buttons)
+        text = (
+            f"🎬 <b>{html.escape(title)}</b>\n\n"
+            f"⏱ مدت زمان: <code>{dur_str}</code>\n"
+            f"👤 کانال: <code>{html.escape(channel)}</code>\n\n"
+            "👇 کیفیت مورد نظرت رو برای دانلود انتخاب کن:"
+        )
+
+        thumbnail = info.get("thumbnail")
+        if thumbnail:
+            try:
+                await message.reply_photo(photo=thumbnail, caption=text, reply_markup=keyboard)
+                await status_msg.delete()
+                return
+            except Exception:
+                pass
+
+        await status_msg.edit_text(text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"YouTube info error: {e}", exc_info=True)
+        await status_msg.edit_text("❌ خطا در دریافت اطلاعات یوتیوب. لطفاً از صحت لینک اطمینان حاصل کرده و مجدداً تلاش کنید.")
+
+@dp.callback_query(F.data.startswith("yt:"))
+async def handle_youtube_callback(callback: types.CallbackQuery):
+    data = callback.data
+    if data == "yt:cancel":
+        await callback.message.delete()
+        await callback.answer("عملیات لغو شد.")
+        return
+
+    parts = data.split(":")
+    if len(parts) < 3:
+        await callback.answer("دستور نامعتبر است.")
+        return
+
+    video_id = parts[1]
+    quality = parts[2]
+    await callback.answer()
+
+    label = "فایل صوتی MP3" if quality == "audio" else f"کیفیت {quality}p"
+    status_msg = await callback.message.reply(f"⚡️ در حال دانلود {label} از یوتیوب... لطفاً چند لحظه صبر کن رفیق 🏎⏳")
+    if quality == "audio":
+        await bot.send_chat_action(callback.message.chat.id, ChatAction.RECORD_VOICE)
+    else:
+        await bot.send_chat_action(callback.message.chat.id, ChatAction.UPLOAD_VIDEO)
+
+    task_dir = None
+    try:
+        res = await download_youtube(video_id, quality)
+        task_dir = res.get("task_dir")
+        file_path = res.get("file_path")
+
+        if quality == "audio":
+            await callback.message.reply_audio(
+                audio=FSInputFile(file_path),
+                title=res.get("title", "YouTube Audio"),
+                performer=res.get("artist") or "YouTube",
+                duration=res.get("duration") or 0,
+                caption=format_caption(f"🎵 {res.get('title', '')}")
+            )
+        else:
+            await callback.message.reply_video(
+                video=FSInputFile(file_path),
+                caption=format_caption(res.get("title", "")),
+                width=res.get("width"),
+                height=res.get("height"),
+                duration=res.get("duration"),
+                supports_streaming=True
+            )
+
+        if callback.from_user:
+            await log_download(callback.from_user.id, f"yt_{video_id}")
+        await status_msg.delete()
+    except Exception as e:
+        logger.error(f"YouTube download error: {e}", exc_info=True)
+        await status_msg.edit_text("❌ خطا در دانلود از یوتیوب! ممکن است حجم فایل بیش از حد مجاز تلگرام باشد یا ویدیو محدود شده باشد.")
+    finally:
+        if task_dir:
+            cleanup_task_dir(task_dir)
+
+async def process_spotify_url(message: types.Message, url: str):
+    status_msg = await message.reply("🎧 در حال دریافت و دانلود موزیک از اسپاتیفای با بالاترین کیفیت (320kbps)... ⚡️⏳")
+    await bot.send_chat_action(message.chat.id, ChatAction.RECORD_VOICE)
+    task_dir = None
+    try:
+        res = await download_spotify(url)
+        task_dir = res.get("task_dir")
+        await message.reply_audio(
+            audio=FSInputFile(res["file_path"]),
+            title=res.get("title", "Spotify Track"),
+            performer=res.get("artist") or "Spotify",
+            duration=res.get("duration") or 0,
+            caption=format_caption(f"🎵 {res.get('title', '')}\n👤 {res.get('artist', '')}")
+        )
+        if message.from_user:
+            await log_download(message.from_user.id, "spotify")
+        await status_msg.delete()
+    except Exception as e:
+        logger.error(f"Spotify download error: {e}", exc_info=True)
+        await status_msg.edit_text("❌ خطا در دریافت آهنگ از اسپاتیفای. لطفاً مجدداً امتحان کنید.")
+    finally:
+        if task_dir:
+            cleanup_task_dir(task_dir)
+
+async def process_generic_url(message: types.Message, url: str, platform: str):
+    plat_names = {
+        "soundcloud": "ساندکلاد",
+        "tiktok": "تیک‌تاک",
+        "twitter": "توییتر (X)",
+        "pinterest": "پینترست",
+        "other": "سایت مبدا"
+    }
+    p_name = plat_names.get(platform, platform.capitalize())
+    status_msg = await message.reply(f"⚡️ در حال دانلود محتوا از {p_name}... لطفاً چند لحظه صبر کن ⏳🏎")
+    task_dir = None
+    try:
+        res = await download_generic(url, platform)
+        task_dir = res.get("task_dir")
+        m_type = res.get("type")
+
+        if m_type == "audio":
+            await message.reply_audio(
+                audio=FSInputFile(res["file_path"]),
+                title=res.get("title", "Audio"),
+                performer=res.get("artist") or p_name,
+                duration=res.get("duration") or 0,
+                caption=format_caption(f"🎵 {res.get('title', '')}")
+            )
+        elif m_type == "photo":
+            await message.reply_photo(
+                photo=FSInputFile(res["file_path"]),
+                caption=format_caption(res.get("title", ""))
+            )
+        else:
+            await message.reply_video(
+                video=FSInputFile(res["file_path"]),
+                caption=format_caption(res.get("title", "")),
+                width=res.get("width"),
+                height=res.get("height"),
+                duration=res.get("duration"),
+                supports_streaming=True
+            )
+
+        if message.from_user:
+            await log_download(message.from_user.id, platform)
+        await status_msg.delete()
+    except Exception as e:
+        logger.error(f"Generic download error ({platform}): {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ خطا در دانلود از {p_name}. ممکن است لینک خصوصی باشد یا محتوا در دسترس نباشد.")
+    finally:
+        if task_dir:
+            cleanup_task_dir(task_dir)
+
+@dp.message(F.text.regexp(GENERAL_URL_PATTERN))
+async def handle_url_message(message: types.Message):
+    user = message.from_user
+    if user:
+        await add_or_update_user(user.id, user.username or "", user.first_name or "")
+
+    url_match = GENERAL_URL_PATTERN.search(message.text)
+    if not url_match:
+        return
+
+    url = url_match.group(0).strip()
+    platform = detect_platform(url)
+
+    if platform == "instagram":
+        await process_instagram_url(message, url)
+    elif platform == "youtube":
+        await process_youtube_url(message, url)
+    elif platform == "spotify":
+        await process_spotify_url(message, url)
+    else:
+        await process_generic_url(message, url, platform)
 
 @dp.message()
 async def handle_other_messages(message: types.Message):
     await message.reply(
         "👋 سلام رفیق!\n\n"
-        "من فقط لینک‌های اینستاگرام رو پردازش و دانلود می‌کنم ⚡️📱\n"
-        "کافیه لینک هر ریلز، ویدیو، آلبوم یا عکسی رو که می‌خوای برام بفرستی تا سریع تحویلت بدم! 😉👇\n\n"
-        "<i>مثال:</i>\n"
-        "<code>https://www.instagram.com/reel/C8P6bOUIa-X/</code>"
+        "من ربات همه‌کاره‌ی دانلود هستم و لینک‌های زیر رو سریع و با بالاترین کیفیت برات دانلود می‌کنم ⚡️📱\n\n"
+        "▫️ <b>اینستاگرام (Instagram):</b> ریلز، پست، عکس، استوری 🎬\n"
+        "▫️ <b>یوتیوب (YouTube):</b> ویدیو با انتخاب کیفیت + نسخه صوتی 📺\n"
+        "▫️ <b>اسپاتیفای (Spotify) و ساندکلاد (SoundCloud):</b> دانلود مستقیم موزیک 🎧\n"
+        "▫️ <b>تیک‌تاک، توییتر و پینترست</b> 📌\n\n"
+        "فقط کافیه لینک مورد نظرت رو برام بفرستی! 😉👇"
     )
 
 from aiohttp import web

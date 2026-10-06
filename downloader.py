@@ -77,10 +77,60 @@ INSTA_URL_REGEX = re.compile(
     re.IGNORECASE
 )
 
+YOUTUBE_REGEX = re.compile(
+    r"(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})",
+    re.IGNORECASE
+)
+
+SPOTIFY_REGEX = re.compile(
+    r"(?:https?:\/\/)?(?:open\.)?spotify\.com\/(?:track|album|playlist|intl-[a-z]+\/track)\/([A-Za-z0-9]+)",
+    re.IGNORECASE
+)
+
+SOUNDCLOUD_REGEX = re.compile(
+    r"(?:https?:\/\/)?(?:www\.|on\.)?soundcloud\.com\/\S+",
+    re.IGNORECASE
+)
+
+TIKTOK_REGEX = re.compile(
+    r"(?:https?:\/\/)?(?:www\.|vm\.|vt\.)?tiktok\.com\/\S+",
+    re.IGNORECASE
+)
+
+TWITTER_REGEX = re.compile(
+    r"(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/\S+\/status\/\d+",
+    re.IGNORECASE
+)
+
+PINTEREST_REGEX = re.compile(
+    r"(?:https?:\/\/)?(?:[a-z]{2}\.)?pinterest\.com\/\S+|pin\.it\/\S+",
+    re.IGNORECASE
+)
+
+def detect_platform(url: str) -> str:
+    if INSTA_URL_REGEX.search(url):
+        return "instagram"
+    if YOUTUBE_REGEX.search(url):
+        return "youtube"
+    if SPOTIFY_REGEX.search(url):
+        return "spotify"
+    if SOUNDCLOUD_REGEX.search(url):
+        return "soundcloud"
+    if TIKTOK_REGEX.search(url):
+        return "tiktok"
+    if TWITTER_REGEX.search(url):
+        return "twitter"
+    if PINTEREST_REGEX.search(url):
+        return "pinterest"
+    return "other"
+
 def extract_shortcode(url: str) -> Optional[str]:
     match = INSTA_URL_REGEX.search(url)
     if match:
         return match.group(1)
+    match_yt = YOUTUBE_REGEX.search(url)
+    if match_yt:
+        return match_yt.group(1)
     return None
 
 def get_media_dimensions(file_path: str):
@@ -378,3 +428,242 @@ def cleanup_task_dir(task_dir: str):
             shutil.rmtree(task_dir, ignore_errors=True)
     except Exception as e:
         print(f"Error cleaning task dir {task_dir}: {e}")
+
+# ================= MULTI-PLATFORM DOWNLOADERS =================
+
+def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
+    setup_ffmpeg()
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": False,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        video_id = info.get("id") or ""
+        title = info.get("title") or "YouTube Video"
+        duration = info.get("duration") or 0
+        thumbnail = info.get("thumbnail") or ""
+        channel = info.get("uploader") or info.get("channel") or ""
+
+        heights = set()
+        for f in info.get("formats", []):
+            h = f.get("height")
+            if h and f.get("vcodec") != "none":
+                heights.add(h)
+
+        common_resolutions = [1080, 720, 480, 360]
+        available_res = [h for h in common_resolutions if any(vh >= h for vh in heights)]
+        if not available_res and heights:
+            available_res = sorted(list(heights), reverse=True)[:3]
+
+        return {
+            "id": video_id,
+            "title": title,
+            "duration": duration,
+            "thumbnail": thumbnail,
+            "channel": channel,
+            "resolutions": available_res,
+            "url": url,
+        }
+
+async def get_youtube_info(url: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(extract_youtube_info_sync, url)
+
+def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
+    setup_ffmpeg()
+    task_id = str(uuid.uuid4())
+    task_dir = os.path.join(DOWNLOADS_DIR, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
+
+    if quality == "audio":
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": outtmpl,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+            "quiet": True,
+            "no_warnings": True,
+        }
+        media_type = "audio"
+    else:
+        q_int = int(quality) if quality.isdigit() else 720
+        fmt = (
+            f"bestvideo[height<={q_int}][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
+            f"bestvideo[height<={q_int}]+bestaudio/"
+            f"best[height<={q_int}]/best"
+        )
+        ydl_opts = {
+            "format": fmt,
+            "outtmpl": outtmpl,
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+        }
+        media_type = "video"
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        title = info.get("title") or "YouTube Video"
+        duration = info.get("duration") or 0
+        channel = info.get("uploader") or info.get("channel") or ""
+
+    files = [
+        f for f in glob.glob(os.path.join(task_dir, "*"))
+        if os.path.isfile(f) and not f.endswith(".part") and not f.endswith(".ytdl")
+    ]
+    if not files:
+        raise ValueError("دانلود فایل از یوتیوب ناموفق بود.")
+
+    file_path = files[0]
+    w, h, dur = get_media_dimensions(file_path)
+
+    return {
+        "task_dir": task_dir,
+        "file_path": file_path,
+        "type": media_type,
+        "title": title,
+        "artist": channel,
+        "duration": dur or duration,
+        "width": w,
+        "height": h,
+    }
+
+async def download_youtube(video_id: str, quality: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(download_youtube_sync, video_id, quality)
+
+def download_spotify_sync(url: str) -> Dict[str, Any]:
+    setup_ffmpeg()
+    task_id = str(uuid.uuid4())
+    task_dir = os.path.join(DOWNLOADS_DIR, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+
+    track_title = "Spotify Track"
+    artist = ""
+
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+        )
+        with urllib.request.urlopen(req, timeout=12) as r:
+            content = r.read().decode("utf-8", errors="ignore")
+        m_title = re.search(r'<meta property="og:title" content="([^"]+)"', content)
+        m_desc = re.search(r'<meta property="og:description" content="([^"]+)"', content)
+        if m_title:
+            track_title = html.unescape(m_title.group(1))
+        if m_desc:
+            desc_text = html.unescape(m_desc.group(1))
+            artist = desc_text.split(" · ")[0] if " · " in desc_text else ""
+    except Exception as e:
+        print(f"Spotify meta fetch note: {e}")
+
+    query = f"{artist} - {track_title} official audio" if artist else f"{track_title} audio"
+    outtmpl = os.path.join(task_dir, f"{track_title}.%(ext)s")
+
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": outtmpl,
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "320",
+        }],
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    dur = 0
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+        entries = info.get("entries") or []
+        if entries:
+            dur = entries[0].get("duration") or 0
+
+    files = [f for f in glob.glob(os.path.join(task_dir, "*")) if os.path.isfile(f) and f.endswith(".mp3")]
+    if not files:
+        raise ValueError("دانلود موزیک از اسپاتیفای با خطا مواجه شد.")
+
+    return {
+        "task_dir": task_dir,
+        "file_path": files[0],
+        "type": "audio",
+        "title": track_title,
+        "artist": artist,
+        "duration": dur,
+    }
+
+async def download_spotify(url: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(download_spotify_sync, url)
+
+def download_generic_sync(url: str, platform: str) -> Dict[str, Any]:
+    setup_ffmpeg()
+    task_id = str(uuid.uuid4())
+    task_dir = os.path.join(DOWNLOADS_DIR, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+
+    outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
+
+    if platform == "soundcloud":
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": outtmpl,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "256",
+            }],
+            "quiet": True,
+            "no_warnings": True,
+        }
+        media_type = "audio"
+    else:
+        # TikTok, Twitter, Pinterest, etc.
+        ydl_opts = {
+            "format": "b/bestvideo[vcodec^=avc]+bestaudio/best",
+            "outtmpl": outtmpl,
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+        }
+        media_type = "video"
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        title = info.get("title") or info.get("description") or f"{platform.capitalize()} Media"
+        duration = info.get("duration") or 0
+        artist = info.get("uploader") or info.get("channel") or ""
+
+    files = [
+        f for f in glob.glob(os.path.join(task_dir, "*"))
+        if os.path.isfile(f) and not f.endswith(".part") and not f.endswith(".ytdl")
+    ]
+    if not files:
+        raise ValueError(f"دانلود محتوا از {platform} ناموفق بود.")
+
+    file_path = files[0]
+    w, h, dur = get_media_dimensions(file_path)
+
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in [".jpg", ".jpeg", ".png", ".webp"]:
+        media_type = "photo"
+
+    return {
+        "task_dir": task_dir,
+        "file_path": file_path,
+        "type": media_type,
+        "title": title,
+        "artist": artist,
+        "duration": dur or duration,
+        "width": w,
+        "height": h,
+    }
+
+async def download_generic(url: str, platform: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(download_generic_sync, url, platform)
