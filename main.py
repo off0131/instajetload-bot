@@ -153,41 +153,41 @@ async def handle_instagram_link(message: types.Message):
                 try:
                     caption_text = truncate_caption(cached.get("caption", ""))
 
-                if len(media_items) == 1:
-                    item = media_items[0]
-                    if item["type"] == "video":
-                        await message.reply_video(
-                            video=item["file_id"],
-                            caption=caption_text,
-                            width=item.get("width"),
-                            height=item.get("height"),
-                            duration=item.get("duration"),
-                            supports_streaming=True
-                        )
-                    else:
-                        await message.reply_photo(photo=item["file_id"], caption=caption_text)
-                elif len(media_items) > 1:
-                    media_group = []
-                    for idx, itm in enumerate(media_items[:10]):
-                        c = caption_text if idx == 0 else None
-                        if itm["type"] == "video":
-                            media_group.append(InputMediaVideo(
-                                media=itm["file_id"],
-                                caption=c,
-                                width=itm.get("width"),
-                                height=itm.get("height"),
-                                duration=itm.get("duration"),
+                    if len(media_items) == 1:
+                        item = media_items[0]
+                        if item["type"] == "video":
+                            await message.reply_video(
+                                video=item["file_id"],
+                                caption=caption_text,
+                                width=item.get("width"),
+                                height=item.get("height"),
+                                duration=item.get("duration"),
                                 supports_streaming=True
-                            ))
+                            )
                         else:
-                            media_group.append(InputMediaPhoto(media=itm["file_id"], caption=c))
-                    await message.reply_media_group(media=media_group)
+                            await message.reply_photo(photo=item["file_id"], caption=caption_text)
+                    elif len(media_items) > 1:
+                        media_group = []
+                        for idx, itm in enumerate(media_items[:10]):
+                            c = caption_text if idx == 0 else None
+                            if itm["type"] == "video":
+                                media_group.append(InputMediaVideo(
+                                    media=itm["file_id"],
+                                    caption=c,
+                                    width=itm.get("width"),
+                                    height=itm.get("height"),
+                                    duration=itm.get("duration"),
+                                    supports_streaming=True
+                                ))
+                            else:
+                                media_group.append(InputMediaPhoto(media=itm["file_id"], caption=c))
+                        await message.reply_media_group(media=media_group)
 
-                await log_download(user.id if user else 0, shortcode)
-                await status_msg.delete()
-                return
-            except Exception as e:
-                logger.warning(f"Cache delivery failed, downloading freshly: {e}")
+                    await log_download(user.id if user else 0, shortcode)
+                    await status_msg.delete()
+                    return
+                except Exception as e:
+                    logger.warning(f"Cache delivery failed, downloading freshly: {e}")
 
     # 2. Download freshly
     task_dir = None

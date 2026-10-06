@@ -21,7 +21,9 @@ COOKIES_FILE = os.path.join(BASE_DIR, "cookies.txt")
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 def setup_ffmpeg():
-    """Ensure ffmpeg binary from imageio_ffmpeg is named 'ffmpeg' and added to PATH."""
+    """Ensure ffmpeg is available in PATH."""
+    if shutil.which("ffmpeg"):
+        return
     try:
         import imageio_ffmpeg
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
