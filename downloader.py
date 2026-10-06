@@ -134,27 +134,34 @@ def _download_via_embed_scraper(shortcode: str, url: str, task_dir: str) -> Dict
             caption = html.unescape(raw_c).strip()
 
         # 2. Extract video URL if post is a video / reel
-        vid_key = "video_url"
-        idx = content.find(vid_key)
-        if idx != -1:
-            http_idx = content.find("https:", idx)
-            mp4_idx = content.find(".mp4", http_idx) if http_idx != -1 else -1
-            if http_idx != -1 and mp4_idx != -1:
-                end_idx = mp4_idx
-                while end_idx < len(content) and content[end_idx] not in ('"', '\\', "'", ' '):
-                    end_idx += 1
-                raw_url = content[http_idx:end_idx]
-                clean_url = raw_url.replace(r'\\\\/', '/').replace(r'\\/', '/').replace(r'\u0025', '%').replace(r'\u0026', '&')
-                
-                # Download video file
-                video_req = urllib.request.Request(clean_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(video_req, timeout=40) as v_resp:
-                    v_data = v_resp.read()
-                    if len(v_data) > 10000:
-                        v_path = os.path.join(task_dir, f"{shortcode}.mp4")
-                        with open(v_path, "wb") as f_out:
-                            f_out.write(v_data)
-                        return {"caption": caption}
+        m_video = re.search(r'video_url[\\\"\':\s]+(https:[^\\\"\']+\.mp4[^\\\"\']*)', content)
+        if not m_video:
+            # Secondary pattern
+            m_video = re.search(r'\"video_url\":\s*\"(https:[^\"]+?\.mp4[^\"]*)\"', content.replace(r'\\\"', '"'))
+
+        if m_video:
+            raw_url = m_video.group(1)
+            clean_url = (
+                raw_url
+                .replace('\\\\\\/', '/')
+                .replace('\\\\/', '/')
+                .replace('\\/', '/')
+                .replace(r'\u0025', '%')
+                .replace(r'\u0026', '&')
+            )
+            
+            # Download video file
+            video_req = urllib.request.Request(
+                clean_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            )
+            with urllib.request.urlopen(video_req, timeout=40) as v_resp:
+                v_data = v_resp.read()
+                if len(v_data) > 10000:
+                    v_path = os.path.join(task_dir, f"{shortcode}.mp4")
+                    with open(v_path, "wb") as f_out:
+                        f_out.write(v_data)
+                    return {"caption": caption}
     except Exception as e:
         print(f"Embed scraper error for {shortcode}: {e}")
 
