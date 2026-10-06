@@ -22,7 +22,17 @@ from aiogram.types import (
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.client.default import DefaultBotProperties
 
-from database import init_db, add_or_update_user, get_cached, save_cache, log_download, get_stats
+from database import (
+    init_db,
+    add_or_update_user,
+    get_user_lang,
+    set_user_lang,
+    get_cached,
+    save_cache,
+    log_download,
+    get_stats,
+)
+from locales import LANGUAGES, get_text
 from downloader import (
     download_instagram_media,
     cleanup_task_dir,
@@ -60,15 +70,43 @@ ADMIN_IDS = [
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-def get_main_keyboard() -> InlineKeyboardMarkup:
+def get_language_keyboard() -> InlineKeyboardMarkup:
+    buttons = [
+        [
+            InlineKeyboardButton(text="🇮🇷 فارسی", callback_data="lang:fa"),
+            InlineKeyboardButton(text="🇺🇸 English", callback_data="lang:en"),
+        ],
+        [
+            InlineKeyboardButton(text="🇸🇦 العربية", callback_data="lang:ar"),
+            InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang:ru"),
+        ],
+        [
+            InlineKeyboardButton(text="🇨🇳 中文", callback_data="lang:zh"),
+            InlineKeyboardButton(text="🇩🇪 Deutsch", callback_data="lang:de"),
+        ],
+        [
+            InlineKeyboardButton(text="🇪🇸 Español", callback_data="lang:es"),
+            InlineKeyboardButton(text="🇫🇷 Français", callback_data="lang:fr"),
+        ],
+        [
+            InlineKeyboardButton(text="🇹🇷 Türkçe", callback_data="lang:tr"),
+            InlineKeyboardButton(text="🇮🇳 हिन्दी", callback_data="lang:hi"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_main_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="⚡️ وضعیت سرور", callback_data="ping"),
-                InlineKeyboardButton(text="💡 راهنما و نکات", callback_data="tips"),
+                InlineKeyboardButton(text=get_text("btn_server_status", lang), callback_data="ping"),
+                InlineKeyboardButton(text=get_text("btn_tips", lang), callback_data="tips"),
             ],
             [
-                InlineKeyboardButton(text="🚀 معرفی به دوستان", switch_inline_query="ربات دانلود سریع و همه‌کاره از اینستاگرام، یوتیوب و اسپاتیفای: @instajetloadbot 🔥"),
+                InlineKeyboardButton(text=get_text("btn_change_lang", lang), callback_data="change_lang"),
+            ],
+            [
+                InlineKeyboardButton(text=get_text("btn_share", lang), switch_inline_query=get_text("share_text", lang)),
             ]
         ]
     )
@@ -76,40 +114,80 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
 @dp.message(CommandStart())
 async def handle_start(message: types.Message):
     user = message.from_user
-    if user:
-        await add_or_update_user(user.id, user.username or "", user.first_name or "")
+    user_id = user.id if user else 0
+    name = user.first_name if user else "Friend"
 
-    name = user.first_name if user else "دوست من"
-    welcome_text = (
-        f"سلام {name} عزیز! خیلی خوش اومدی 🤩❤️✨\n\n"
-        "من ربات همه‌کاره‌ی <b>InstaJetLoad</b> هستم؛ هر لینکی برام بفرستی با <b>بالاترین کیفیت و سرعت جت</b> برات دانلود می‌کنم ⚡️🎯\n\n"
-        "🔥 <b>پلتفرم‌های پشتیبانی‌شده:</b>\n"
-        "▫️ <b>اینستاگرام (Instagram):</b> ریلز، پست، عکس با کیفیت اصلی و بدون افت فریم 🎬\n"
-        "▫️ <b>یوتیوب (YouTube):</b> با انتخاب کیفیت دلخواه (1080p, 720p, 480p) یا فایل صوتی MP3 📺\n"
-        "▫️ <b>اسپاتیفای (Spotify):</b> دانلود مستقیم موزیک با بالاترین کیفیت (320kbps) 🎧\n"
-        "▫️ <b>ساندکلاد (SoundCloud):</b> دانلود آهنگ با کیفیت بالا 🎵\n"
-        "▫️ <b>تیک‌تاک (TikTok):</b> ویدیو بدون واترمرک 🚀\n"
-        "▫️ <b>توییتر / اکس (Twitter / X) و پینترست (Pinterest)</b> 📌\n"
-        "▫️ <b>متن کپشن:</b> با یک کلیک کپی کن همراه با هشتگ‌ها ✍️\n\n"
-        "👇 <b>همین الان امتحانش کن:</b>\n"
-        "فقط کافیه لینک مورد نظرت رو برام بفرستی! 😉🚀"
-    )
-    await message.answer(welcome_text, reply_markup=get_main_keyboard())
+    detected_lang = "en"
+    if user and user.language_code:
+        code = user.language_code.lower()
+        for k in LANGUAGES:
+            if code.startswith(k):
+                detected_lang = k
+                break
+
+    is_new = False
+    if user:
+        is_new = await add_or_update_user(
+            user.id,
+            user.username or "",
+            user.first_name or "",
+            default_lang=detected_lang
+        )
+
+    # If it is a new user, present the language selector first!
+    if is_new:
+        welcome_intro = (
+            f"👋 Hello {name}! Welcome to <b>InstaJetLoad</b>\n"
+            f"سلام {name} عزیز! به ربات <b>InstaJetLoad</b> خوش آمدید\n\n"
+            "🌐 <b>Please choose your language / لطفاً زبان خود را انتخاب کنید:</b>"
+        )
+        await message.answer(welcome_intro, reply_markup=get_language_keyboard())
+        return
+
+    lang = await get_user_lang(user_id)
+    welcome_text = get_text("welcome", lang, name=name)
+    await message.answer(welcome_text, reply_markup=get_main_keyboard(lang))
+
+@dp.message(Command("language", "lang"))
+async def handle_cmd_language(message: types.Message):
+    user_id = message.from_user.id if message.from_user else 0
+    lang = await get_user_lang(user_id)
+    await message.answer(get_text("choose_lang", lang), reply_markup=get_language_keyboard())
+
+@dp.callback_query(F.data == "change_lang")
+async def cb_change_language(callback: types.CallbackQuery):
+    user_id = callback.from_user.id if callback.from_user else 0
+    lang = await get_user_lang(user_id)
+    await callback.message.answer(get_text("choose_lang", lang), reply_markup=get_language_keyboard())
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("lang:"))
+async def cb_select_language(callback: types.CallbackQuery):
+    target_lang = callback.data.split(":")[1]
+    if target_lang not in LANGUAGES:
+        target_lang = "en"
+
+    user_id = callback.from_user.id if callback.from_user else 0
+    name = callback.from_user.first_name if callback.from_user else "Friend"
+    await set_user_lang(user_id, target_lang)
+
+    alert_text = get_text("lang_updated", target_lang)
+    await callback.answer(alert_text, show_alert=True)
+
+    welcome_text = get_text("welcome", target_lang, name=name)
+    await callback.message.answer(welcome_text, reply_markup=get_main_keyboard(target_lang))
 
 @dp.callback_query(F.data == "ping")
 async def cb_ping(callback: types.CallbackQuery):
-    await callback.answer("🟢 سرور کاملاً بیداره و سرعت دانلود در حداکثر توان قرار داره! ⚡️🏎", show_alert=True)
+    user_id = callback.from_user.id if callback.from_user else 0
+    lang = await get_user_lang(user_id)
+    await callback.answer(get_text("ping_alert", lang), show_alert=True)
 
 @dp.callback_query(F.data == "tips")
 async def cb_tips(callback: types.CallbackQuery):
-    tips_text = (
-        "💡 <b>چندتا نکته خودمانی برای استفاده راحت‌تر:</b> ✨\n\n"
-        "۱. <b>اینستاگرام:</b> دکمه Share زیر ریلز یا پست رو بزن و Copy link رو انتخاب کن 📲\n\n"
-        "۲. <b>یوتیوب:</b> هر لینکی بفرستی، کیفیت‌های مختلف (1080p, 720p, ...) به همراه نسخه صوتی MP3 بهت پیشنهاد داده میشه 📺\n\n"
-        "۳. <b>اسپاتیفای و ساندکلاد:</b> لینک موزیک رو بفرست تا فایل صوتی کامل با بالاترین کیفیت برات ارسال بشه 🎧\n\n"
-        "۴. <b>کش هوشمند:</b> فایل‌هایی که قبلاً دانلود شدن، آنی و در کمتر از یک ثانیه تحویلت داده میشن! ⚡️"
-    )
-    await callback.message.answer(tips_text)
+    user_id = callback.from_user.id if callback.from_user else 0
+    lang = await get_user_lang(user_id)
+    await callback.message.answer(get_text("tips_content", lang))
     await callback.answer()
 
 @dp.message(Command("stats"))
@@ -152,9 +230,11 @@ truncate_caption = format_caption
 
 async def process_instagram_url(message: types.Message, url: str):
     user = message.from_user
+    user_id = user.id if user else 0
+    lang = await get_user_lang(user_id)
     shortcode = extract_shortcode(url)
 
-    status_msg = await message.reply("⚡️ دریافت شد! در حال دانلود با بالاترین کیفیت... لطفاً چند ثانیه صبر کن رفیق ⏳🏎")
+    status_msg = await message.reply(get_text("downloading_general", lang))
     await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_VIDEO)
 
     # 1. Check database cache
@@ -298,33 +378,25 @@ async def process_instagram_url(message: types.Message, url: str):
         logger.error(f"Download error: {e}", exc_info=True)
         err_msg = str(e)
         if "private" in err_msg.lower() or "followers" in err_msg.lower():
-            text = (
-                "🔒 <b>پیج یا پست خصوصیه (Private):</b>\n\n"
-                "رفیق، اینستاگرام اجازه دانلود از پیج‌های قفل‌شده و پرایوت رو بدون لاگین نمیده 🥺💔\n"
-                "لطفاً مطمئن شو پیج عمومیه (Public) تا بتونم با بالاترین کیفیت برات دانلودش کنم! ✨"
-            )
-        elif "Unsupported URL" in err_msg:
-            text = "🧐 <b>لینک نامعتبره!</b>\n\nلطفاً لینک کامل یک پست، ریلز یا استوری از اینستاگرام رو برام بفرست دوست من 🌸"
+            text = get_text("err_private", lang)
         else:
-            text = (
-                "⚠️ <b>یه مشکلی پیش اومد:</b>\n\n"
-                "اینستاگرام موقتاً پاسخی نداد یا ترافیک این بخش زیاده 🙁\n"
-                "چند لحظه بعد دوباره لینکش رو بفرست تا تلاشمو بکنم! 🔄❤️"
-            )
+            text = get_text("err_general", lang)
         await status_msg.edit_text(text)
     finally:
         if task_dir:
             cleanup_task_dir(task_dir)
 
 async def process_youtube_url(message: types.Message, url: str):
-    status_msg = await message.reply("⚡️ در حال دریافت اطلاعات ویدیو از یوتیوب... ⏳")
+    user_id = message.from_user.id if message.from_user else 0
+    lang = await get_user_lang(user_id)
+    status_msg = await message.reply(get_text("yt_fetching_info", lang))
     try:
         info = await get_youtube_info(url)
         video_id = info["id"]
-        title = info.get("title", "ویدیو یوتیوب")
+        title = info.get("title", "YouTube Video")
         duration = info.get("duration", 0)
-        dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "نامشخص"
-        channel = info.get("channel", "یوتیوب")
+        dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "0:00"
+        channel = info.get("channel", "YouTube")
         resolutions = info.get("resolutions") or [720, 480, 360]
 
         # Build inline keyboard for quality selection
@@ -336,18 +408,17 @@ async def process_youtube_url(message: types.Message, url: str):
             quality_buttons.append(row)
 
         quality_buttons.append([
-            InlineKeyboardButton(text="🎵 دانلود صوتی (MP3)", callback_data=f"yt:{video_id}:audio")
+            InlineKeyboardButton(text=get_text("yt_audio_btn", lang), callback_data=f"yt:{video_id}:audio")
         ])
         quality_buttons.append([
-            InlineKeyboardButton(text="❌ انصراف", callback_data="yt:cancel")
+            InlineKeyboardButton(text=get_text("btn_cancel", lang), callback_data="yt:cancel")
         ])
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=quality_buttons)
         text = (
             f"🎬 <b>{html.escape(title)}</b>\n\n"
-            f"⏱ مدت زمان: <code>{dur_str}</code>\n"
-            f"👤 کانال: <code>{html.escape(channel)}</code>\n\n"
-            "👇 کیفیت مورد نظرت رو برای دانلود انتخاب کن:"
+            f"⏱ <code>{dur_str}</code> | 👤 <code>{html.escape(channel)}</code>\n\n"
+            f"{get_text('yt_select_quality', lang)}"
         )
 
         thumbnail = info.get("thumbnail")
@@ -362,27 +433,30 @@ async def process_youtube_url(message: types.Message, url: str):
         await status_msg.edit_text(text, reply_markup=keyboard)
     except Exception as e:
         logger.error(f"YouTube info error: {e}", exc_info=True)
-        await status_msg.edit_text("❌ خطا در دریافت اطلاعات یوتیوب. لطفاً از صحت لینک اطمینان حاصل کرده و مجدداً تلاش کنید.")
+        await status_msg.edit_text(get_text("err_general", lang))
 
 @dp.callback_query(F.data.startswith("yt:"))
 async def handle_youtube_callback(callback: types.CallbackQuery):
     data = callback.data
     if data == "yt:cancel":
         await callback.message.delete()
-        await callback.answer("عملیات لغو شد.")
+        await callback.answer("OK")
         return
 
     parts = data.split(":")
     if len(parts) < 3:
-        await callback.answer("دستور نامعتبر است.")
+        await callback.answer()
         return
 
     video_id = parts[1]
     quality = parts[2]
     await callback.answer()
 
-    label = "فایل صوتی MP3" if quality == "audio" else f"کیفیت {quality}p"
-    status_msg = await callback.message.reply(f"⚡️ در حال دانلود {label} از یوتیوب... لطفاً چند لحظه صبر کن رفیق 🏎⏳")
+    user_id = callback.from_user.id if callback.from_user else 0
+    lang = await get_user_lang(user_id)
+    quality_label = get_text("yt_audio_btn", lang) if quality == "audio" else f"{quality}p"
+    status_msg = await callback.message.reply(get_text("yt_downloading", lang, quality=quality_label))
+
     if quality == "audio":
         await bot.send_chat_action(callback.message.chat.id, ChatAction.RECORD_VOICE)
     else:
@@ -417,13 +491,15 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
         await status_msg.delete()
     except Exception as e:
         logger.error(f"YouTube download error: {e}", exc_info=True)
-        await status_msg.edit_text("❌ خطا در دانلود از یوتیوب! ممکن است حجم فایل بیش از حد مجاز تلگرام باشد یا ویدیو محدود شده باشد.")
+        await status_msg.edit_text(get_text("err_general", lang))
     finally:
         if task_dir:
             cleanup_task_dir(task_dir)
 
 async def process_spotify_url(message: types.Message, url: str):
-    status_msg = await message.reply("🎧 در حال دریافت و دانلود موزیک از اسپاتیفای با بالاترین کیفیت (320kbps)... ⚡️⏳")
+    user_id = message.from_user.id if message.from_user else 0
+    lang = await get_user_lang(user_id)
+    status_msg = await message.reply(get_text("spotify_downloading", lang))
     await bot.send_chat_action(message.chat.id, ChatAction.RECORD_VOICE)
     task_dir = None
     try:
@@ -441,21 +517,23 @@ async def process_spotify_url(message: types.Message, url: str):
         await status_msg.delete()
     except Exception as e:
         logger.error(f"Spotify download error: {e}", exc_info=True)
-        await status_msg.edit_text("❌ خطا در دریافت آهنگ از اسپاتیفای. لطفاً مجدداً امتحان کنید.")
+        await status_msg.edit_text(get_text("err_general", lang))
     finally:
         if task_dir:
             cleanup_task_dir(task_dir)
 
 async def process_generic_url(message: types.Message, url: str, platform: str):
+    user_id = message.from_user.id if message.from_user else 0
+    lang = await get_user_lang(user_id)
     plat_names = {
-        "soundcloud": "ساندکلاد",
-        "tiktok": "تیک‌تاک",
-        "twitter": "توییتر (X)",
-        "pinterest": "پینترست",
-        "other": "سایت مبدا"
+        "soundcloud": "SoundCloud",
+        "tiktok": "TikTok",
+        "twitter": "Twitter (X)",
+        "pinterest": "Pinterest",
+        "other": "Media"
     }
     p_name = plat_names.get(platform, platform.capitalize())
-    status_msg = await message.reply(f"⚡️ در حال دانلود محتوا از {p_name}... لطفاً چند لحظه صبر کن ⏳🏎")
+    status_msg = await message.reply(get_text("platform_downloading", lang, platform=p_name))
     task_dir = None
     try:
         res = await download_generic(url, platform)
@@ -490,7 +568,7 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
         await status_msg.delete()
     except Exception as e:
         logger.error(f"Generic download error ({platform}): {e}", exc_info=True)
-        await status_msg.edit_text(f"❌ خطا در دانلود از {p_name}. ممکن است لینک خصوصی باشد یا محتوا در دسترس نباشد.")
+        await status_msg.edit_text(get_text("err_general", lang))
     finally:
         if task_dir:
             cleanup_task_dir(task_dir)
@@ -519,15 +597,9 @@ async def handle_url_message(message: types.Message):
 
 @dp.message()
 async def handle_other_messages(message: types.Message):
-    await message.reply(
-        "👋 سلام رفیق!\n\n"
-        "من ربات همه‌کاره‌ی دانلود هستم و لینک‌های زیر رو سریع و با بالاترین کیفیت برات دانلود می‌کنم ⚡️📱\n\n"
-        "▫️ <b>اینستاگرام (Instagram):</b> ریلز، پست، عکس، استوری 🎬\n"
-        "▫️ <b>یوتیوب (YouTube):</b> ویدیو با انتخاب کیفیت + نسخه صوتی 📺\n"
-        "▫️ <b>اسپاتیفای (Spotify) و ساندکلاد (SoundCloud):</b> دانلود مستقیم موزیک 🎧\n"
-        "▫️ <b>تیک‌تاک، توییتر و پینترست</b> 📌\n\n"
-        "فقط کافیه لینک مورد نظرت رو برام بفرستی! 😉👇"
-    )
+    user_id = message.from_user.id if message.from_user else 0
+    lang = await get_user_lang(user_id)
+    await message.reply(get_text("help_unsupported", lang))
 
 from aiohttp import web
 
@@ -558,20 +630,20 @@ async def start_web_server():
     await site.start()
     logger.info(f"Healthcheck web server running on 0.0.0.0:{port}")
 
-from aiogram.types import BotCommandScopeChat
-
 async def set_bot_commands():
     try:
         # Default commands visible to regular users
         default_commands = [
-            BotCommand(command="start", description="🚀 شروع و منوی اصلی ربات"),
+            BotCommand(command="start", description="🚀 Start / شروع"),
+            BotCommand(command="language", description="🌐 Change language / تغییر زبان"),
         ]
         await bot.set_my_commands(default_commands, scope=BotCommandScopeDefault())
 
         # Admin commands with stats
         admin_commands = [
-            BotCommand(command="start", description="🚀 شروع و منوی اصلی ربات"),
-            BotCommand(command="stats", description="📊 آمار عملکرد ربات (پنل ادمین)"),
+            BotCommand(command="start", description="🚀 Start / شروع"),
+            BotCommand(command="language", description="🌐 Change language / تغییر زبان"),
+            BotCommand(command="stats", description="📊 Bot Stats (Admin)"),
         ]
         for admin_id in ADMIN_IDS:
             try:

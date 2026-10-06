@@ -1,6 +1,7 @@
 import aiosqlite
 import json
 import os
+from typing import Optional
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "database.sqlite")
 
@@ -11,9 +12,16 @@ async def init_db():
                 user_id INTEGER PRIMARY KEY,
                 username TEXT,
                 first_name TEXT,
+                lang TEXT DEFAULT 'fa',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Safe migration if table existed without lang column
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN lang TEXT DEFAULT 'fa'")
+        except Exception:
+            pass
+
         await db.execute("""
             CREATE TABLE IF NOT EXISTS cached_media (
                 shortcode TEXT PRIMARY KEY,
@@ -33,15 +41,37 @@ async def init_db():
         """)
         await db.commit()
 
-async def add_or_update_user(user_id: int, username: str, first_name: str):
+async def add_or_update_user(user_id: int, username: str, first_name: str, default_lang: Optional[str] = None) -> bool:
+    """Returns True if the user was newly created, False if already existed."""
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT INTO users (user_id, username, first_name)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                username=excluded.username,
-                first_name=excluded.first_name
-        """, (user_id, username, first_name))
+        cursor = await db.execute("SELECT lang FROM users WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        if row:
+            await db.execute("""
+                UPDATE users SET username = ?, first_name = ? WHERE user_id = ?
+            """, (username, first_name, user_id))
+            await db.commit()
+            return False
+        else:
+            lang = default_lang or "fa"
+            await db.execute("""
+                INSERT INTO users (user_id, username, first_name, lang)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, username, first_name, lang))
+            await db.commit()
+            return True
+
+async def get_user_lang(user_id: int) -> str:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT lang FROM users WHERE user_id = ?", (user_id,))
+        row = await cursor.fetchone()
+        if row and row[0]:
+            return row[0]
+        return "fa"
+
+async def set_user_lang(user_id: int, lang: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET lang = ? WHERE user_id = ?", (lang, user_id))
         await db.commit()
 
 async def get_cached(shortcode: str):
