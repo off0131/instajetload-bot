@@ -103,7 +103,7 @@ def get_media_dimensions(file_path: str):
 def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
     ydl_opts: Dict[str, Any] = {
         "outtmpl": os.path.join(task_dir, "%(id)s_%(playlist_index)s.%(ext)s"),
-        "format": "bestvideo[vcodec!=none]+bestaudio[acodec!=none]/bestvideo+bestaudio/best",
+        "format": "b/bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo[vcodec^=avc]+bestaudio/best[vcodec^=avc]/best",
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
