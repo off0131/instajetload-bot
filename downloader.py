@@ -111,6 +111,10 @@ def _download_with_gallery_dl(url: str, task_dir: str) -> Dict[str, Any]:
 
 def _download_uncropped_photo_and_caption(shortcode: str, url: str, task_dir: str) -> Dict[str, Any]:
     """Downloads original full-resolution uncropped photo (not the 640x640 square crop) and gets caption."""
+    # Never scrape a Reel or Video link as a photo!
+    if "/reel/" in url.lower() or "/reels/" in url.lower():
+        return {}
+
     caption = ""
     # 1. Fetch caption via OpenGraph metadata
     try:
@@ -139,6 +143,9 @@ def _download_uncropped_photo_and_caption(shortcode: str, url: str, task_dir: st
             }
         )
         with urllib.request.urlopen(req, timeout=20) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            if "image" not in content_type.lower():
+                return {"caption": caption}
             data = resp.read()
             if len(data) > 5000:
                 target_path = os.path.join(task_dir, "00_original_photo.jpg")
@@ -188,12 +195,18 @@ def _download_sync(url: str) -> Dict[str, Any]:
 
     # 3. Third attempt: Uncropped full-resolution photo scraper
     if not downloaded_files and shortcode:
-        photo_res = _download_uncropped_photo_and_caption(shortcode, url, task_dir)
-        if not caption:
-            caption = photo_res.get("caption", "")
-        downloaded_files = get_valid_files()
+        # If it was explicitly a /reel/ link, don't download a photo!
+        if "/reel/" not in url.lower() and "/reels/" not in url.lower():
+            photo_res = _download_uncropped_photo_and_caption(shortcode, url, task_dir)
+            if not caption:
+                caption = photo_res.get("caption", "")
+            downloaded_files = get_valid_files()
 
     if not downloaded_files:
+        if "/reel/" in url.lower() or "/reels/" in url.lower():
+            raise ValueError(
+                "خطا در دریافت ویدیو: این ریلز خصوصی (Private) است یا به علت محدودیت‌های جدید اینستاگرام نیاز به کوکی دارد."
+            )
         raise ValueError(
             "اینستاگرام برای دانلود این پست یا استوری نیاز به لاگین دارد یا پیج خصوصی (Private) است."
         )
