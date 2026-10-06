@@ -48,106 +48,70 @@ ADMIN_IDS = [
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-def get_main_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    buttons = [
-        [
-            InlineKeyboardButton(text="📖 راهنمای استفاده", callback_data="help"),
-            InlineKeyboardButton(text="⚡️ وضعیت اتصال ربات", callback_data="ping"),
-        ],
-        [
-            InlineKeyboardButton(text="📣 اشتراک‌گذاری با دوستان", switch_inline_query="دانلود سریع هر ویدیوی اینستاگرام با @instajetloadbot"),
+def get_main_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⚡️ وضعیت سرعت ربات", callback_data="ping"),
+                InlineKeyboardButton(text="💡 نکات دانلود سریع", callback_data="tips"),
+            ],
+            [
+                InlineKeyboardButton(text="🚀 معرفی به دوستان", switch_inline_query="بهترین ربات دانلود سریع از اینستاگرام: @instajetloadbot 🔥"),
+            ]
         ]
-    ]
-    # Show stats only if user is the admin / creator
-    if is_admin(user_id):
-        buttons.append([
-            InlineKeyboardButton(text="📊 آمار ربات (پنل ادمین)", callback_data="stats")
-        ])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
 
 @dp.message(CommandStart())
 async def handle_start(message: types.Message):
     user = message.from_user
-    user_id = user.id if user else 0
     if user:
         await add_or_update_user(user.id, user.username or "", user.first_name or "")
 
+    name = user.first_name if user else "دوست من"
     welcome_text = (
-        f"سلام <b>{user.first_name if user else 'کاربر گرامی'}</b> عزیز! ⚡️\n\n"
-        "به ربات اختصاصی <b>InstaJetLoad</b> خوش آمدید.\n"
-        "برای دانلود کافیست هر لینکی از اینستاگرام را همین‌جا ارسال کنید:\n\n"
-        "🎬 <b>ریلز (Reels):</b> دانلود با حداکثر کیفیت و سایز کامل بدون افت رزولوشن\n"
-        "📸 <b>پست‌های تصویری:</b> دانلود با وضوح اصلی ۱۰۸۰ بدون کراپ مربع\n"
-        "🗂 <b>پست‌های آلبومی:</b> دریافت تمام اسلایدهای عکس و ویدیو به‌همراه کپشن\n\n"
-        "👇 <i>لینک اینستاگرام را بفرستید تا فوراً تحویل بگیرید:</i>"
+        f"سلام {name} عزیز! خیلی خوش اومدی 🤩❤️✨\n\n"
+        "من اینجام تا هرچیزی از اینستاگرام خواستی رو با <b>بالاترین کیفیت و سرعت برق‌آسا</b> برات دانلود کنم ⚡️🎯\n\n"
+        "🔥 <b>چی برات دانلود می‌کنم؟</b>\n"
+        "▫️ <b>ریلز (Reels):</b> کیفیت اصلی بدون افت فریم 🎬\n"
+        "▫️ <b>عکس‌ها:</b> وضوح شفاف و کامل بدون کات شدن 📸\n"
+        "▫️ <b>آلبوم‌ها و اسلایدها:</b> تمام عکس‌ها و فیلم‌ها باهم 🗂\n"
+        "▫️ <b>متن کپشن:</b> همراه با ایموجی‌ها و هشتگ‌ها ✍️\n\n"
+        "👇 <b>همین الان امتحانش کن:</b>\n"
+        "فقط کافیه لینک پست یا ریلز رو برام بفرستی تا در چند ثانیه تحویلت بدم! 😉🚀"
     )
-    await message.answer(welcome_text, reply_markup=get_main_keyboard(user_id))
-
-@dp.message(Command("help"))
-async def handle_help(message: types.Message):
-    help_text = (
-        "<b>📖 راهنمای استفاده از ربات:</b>\n\n"
-        "۱. در اپلیکیشن اینستاگرام روی دکمه‌ی اشتراک‌گذاری (Share) در زیر پست یا ریلز بزنید.\n"
-        "۲. گزینه‌ی <b>Copy link</b> را لمس کنید.\n"
-        "۳. لینک را در این چت بفرستید.\n\n"
-        "💡 <b>نکات مهم:</b>\n"
-        "• برای دانلود استوری یا پست‌های خصوصی، پیج باید عمومی باشد یا کوکی ست شده باشد.\n"
-        "• فایل‌ها پس از یک‌بار دانلود در کش ذخیره شده و دفعات بعد آنی ارسال می‌شوند."
-    )
-    await message.answer(help_text)
-
-@dp.callback_query(F.data == "help")
-async def cb_help(callback: types.CallbackQuery):
-    help_text = (
-        "<b>📖 راهنمای استفاده از ربات:</b>\n\n"
-        "۱. در اپلیکیشن اینستاگرام روی دکمه‌ی اشتراک‌گذاری (Share) در زیر پست یا ریلز بزنید.\n"
-        "۲. گزینه‌ی <b>Copy link</b> را لمس کنید.\n"
-        "۳. لینک را در این چت بفرستید.\n\n"
-        "💡 <b>نکات مهم:</b>\n"
-        "• برای دانلود استوری یا پست‌های خصوصی، پیج باید عمومی باشد یا کوکی ست شده باشد.\n"
-        "• فایل‌ها پس از یک‌بار دانلود در کش ذخیره شده و دفعات بعد آنی ارسال می‌شوند."
-    )
-    await callback.message.answer(help_text)
-    await callback.answer()
+    await message.answer(welcome_text, reply_markup=get_main_keyboard())
 
 @dp.callback_query(F.data == "ping")
 async def cb_ping(callback: types.CallbackQuery):
-    await callback.answer("⚡️ سرور ابری فعال و وضعیت ربات آنلاین است!", show_alert=True)
+    await callback.answer("🟢 سرور کاملاً بیداره و سرعت دانلود در حداکثر توان قرار داره! ⚡️🏎", show_alert=True)
+
+@dp.callback_query(F.data == "tips")
+async def cb_tips(callback: types.CallbackQuery):
+    tips_text = (
+        "💡 <b>چندتا نکته خودمانی برای دانلود راحت‌تر:</b> ✨\n\n"
+        "۱. برای کپی کردن لینک، زیر هر ریلز یا پست دکمه <b>Share (فلش یا موشک کاغذی)</b> رو بزن و <b>Copy link</b> رو انتخاب کن 📲\n\n"
+        "۲. پیج حتماً باید عمومی (Public) باشه تا محتواش بدون معطلی دانلود بشه 🔓\n\n"
+        "۳. اگه ویدیویی رو قبلاً کسی دانلود کرده باشه، ربات اون رو آنی و در کمتر از یک ثانیه برات می‌فرسته! ⚡️"
+    )
+    await callback.message.answer(tips_text)
+    await callback.answer()
 
 @dp.message(Command("stats"))
 async def handle_cmd_stats(message: types.Message):
     user_id = message.from_user.id if message.from_user else 0
     if not is_admin(user_id):
-        await message.answer("⛔️ این دستور فقط برای مدیر ربات قابل مشاهده است.")
+        await message.answer("⛔️ این بخش خصوصی و مختص ادمین ربات هستش 😉")
         return
 
     stats = await get_stats()
     text = (
-        "<b>📊 آمار عملکرد ربات (پنل ادمین):</b>\n\n"
-        f"👥 کل کاربران ثبت شده: <b>{stats['users']}</b> نفر\n"
-        f"📥 کل دانلودهای موفق: <b>{stats['downloads']}</b> بار\n"
-        f"⚡️ فایل‌های موجود در کش: <b>{stats['cached']}</b> عدد\n"
-        "🟢 وضعیت سرور ابری: <b>Online (Render 24/7)</b>"
+        "<b>📊 وضعیت عملکرد ربات (پنل اختصاصی ادمین):</b> 👑\n\n"
+        f"👥 تعداد کل کاربران: <b>{stats['users']}</b> نفر 🔥\n"
+        f"📥 تعداد دانلودهای موفق: <b>{stats['downloads']}</b> بار ⚡️\n"
+        f"💾 فایل‌های ذخیره شده در کش: <b>{stats['cached']}</b> عدد 🚀\n"
+        "🟢 سرور ابری: <b>Online & Active 24/7 (Render)</b>"
     )
     await message.answer(text)
-
-@dp.callback_query(F.data == "stats")
-async def cb_stats(callback: types.CallbackQuery):
-    user_id = callback.from_user.id if callback.from_user else 0
-    if not is_admin(user_id):
-        await callback.answer("⛔️ دسترسی به آمار فقط برای مدیر ربات مجاز است.", show_alert=True)
-        return
-
-    stats = await get_stats()
-    text = (
-        "<b>📊 آمار عملکرد ربات (پنل ادمین):</b>\n\n"
-        f"👥 کل کاربران ثبت شده: <b>{stats['users']}</b> نفر\n"
-        f"📥 کل دانلودهای موفق: <b>{stats['downloads']}</b> بار\n"
-        f"⚡️ فایل‌های موجود در کش: <b>{stats['cached']}</b> عدد\n"
-        "🟢 وضعیت سرور ابری: <b>Online (Render 24/7)</b>"
-    )
-    await callback.message.answer(text)
-    await callback.answer()
 
 INSTA_PATTERN = re.compile(r"https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/\S+", re.IGNORECASE)
 
@@ -171,7 +135,7 @@ async def handle_instagram_link(message: types.Message):
     url = url_match.group(0).strip()
     shortcode = extract_shortcode(url)
 
-    status_msg = await message.reply("⏳ در حال بررسی و دانلود از اینستاگرام... لطفاً چند لحظه صبر کنید.")
+    status_msg = await message.reply("⚡️ دریافت شد! در حال دانلود با بالاترین کیفیت... لطفاً چند ثانیه صبر کن رفیق ⏳🏎")
     await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_VIDEO)
 
     # 1. Check database cache
@@ -311,13 +275,18 @@ async def handle_instagram_link(message: types.Message):
         err_msg = str(e)
         if "Private" in err_msg or "login" in err_msg.lower():
             text = (
-                "❌ <b>خطا در دسترسی:</b>\n"
-                "این صفحه خصوصی (Private) است یا اینستاگرام برای مشاهده این پست نیاز به ورود دارد."
+                "🔒 <b>پیج یا پست خصوصیه (Private):</b>\n\n"
+                "رفیق، اینستاگرام اجازه دانلود از پیج‌های قفل‌شده و پرایوت رو بدون لاگین نمیده 🥺💔\n"
+                "لطفاً مطمئن شو پیج عمومیه (Public) تا بتونم با بالاترین کیفیت برات دانلودش کنم! ✨"
             )
         elif "Unsupported URL" in err_msg:
-            text = "❌ لینک ارسال شده معتبر یا پشتیبانی شده نیست."
+            text = "🧐 <b>لینک نامعتبره!</b>\n\nلطفاً لینک کامل یک پست، ریلز یا استوری از اینستاگرام رو برام بفرست دوست من 🌸"
         else:
-            text = "❌ متأسفانه در دانلود این پست خطایی رخ داد. لطفاً مطمئن شوید پیج عمومی (Public) است و مجدداً تلاش کنید."
+            text = (
+                "⚠️ <b>یه مشکلی پیش اومد:</b>\n\n"
+                "اینستاگرام موقتاً پاسخی نداد یا این محتوا در دسترسم نیست 🙁\n"
+                "اگه پیج عمومیه، چند لحظه بعد دوباره لینکش رو بفرست تا تلاشمو بکنم! 🔄❤️"
+            )
 
         await status_msg.edit_text(text)
 
@@ -328,8 +297,11 @@ async def handle_instagram_link(message: types.Message):
 @dp.message()
 async def handle_other_messages(message: types.Message):
     await message.reply(
-        "لطفاً یک لینک معتبر از اینستاگرام ارسال کنید (شامل پست، ریلز یا آلبوم).\n"
-        "مثال:\n<code>https://www.instagram.com/reel/...</code>"
+        "👋 سلام رفیق!\n\n"
+        "من فقط لینک‌های اینستاگرام رو پردازش و دانلود می‌کنم ⚡️📱\n"
+        "کافیه لینک هر ریلز، ویدیو، آلبوم یا عکسی رو که می‌خوای برام بفرستی تا سریع تحویلت بدم! 😉👇\n\n"
+        "<i>مثال:</i>\n"
+        "<code>https://www.instagram.com/reel/C8P6bOUIa-X/</code>"
     )
 
 from aiohttp import web
@@ -366,16 +338,14 @@ async def set_bot_commands():
     try:
         # Default commands visible to regular users
         default_commands = [
-            BotCommand(command="start", description="🚀 شروع و منوی اصلی"),
-            BotCommand(command="help", description="📖 راهنمای دانلود"),
+            BotCommand(command="start", description="🚀 شروع و منوی اصلی ربات"),
         ]
         await bot.set_my_commands(default_commands, scope=BotCommandScopeDefault())
 
         # Admin commands with stats
         admin_commands = [
-            BotCommand(command="start", description="🚀 شروع و منوی اصلی"),
-            BotCommand(command="help", description="📖 راهنمای دانلود"),
-            BotCommand(command="stats", description="📊 آمار عملکرد ربات (ادمین)"),
+            BotCommand(command="start", description="🚀 شروع و منوی اصلی ربات"),
+            BotCommand(command="stats", description="📊 آمار عملکرد ربات (پنل ادمین)"),
         ]
         for admin_id in ADMIN_IDS:
             try:
