@@ -20,6 +20,35 @@ COOKIES_FILE = os.path.join(BASE_DIR, "cookies.txt")
 
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
+def ensure_cookies_file() -> Optional[str]:
+    """Ensures cookies file is ready from Render Secret Files, Env Var, or local file."""
+    render_secrets_path = "/etc/secrets/cookies.txt"
+    if os.path.exists(render_secrets_path) and os.path.getsize(render_secrets_path) > 0:
+        return render_secrets_path
+
+    if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
+        return COOKIES_FILE
+
+    env_cookies = os.environ.get("INSTAGRAM_COOKIES")
+    if env_cookies and env_cookies.strip():
+        try:
+            content = env_cookies.strip()
+            try:
+                import base64
+                decoded = base64.b64decode(content).decode("utf-8")
+                if "instagram.com" in decoded or "Netscape" in decoded:
+                    content = decoded
+            except Exception:
+                pass
+            with open(COOKIES_FILE, "w", encoding="utf-8") as f:
+                f.write(content)
+            print("Successfully populated cookies.txt from INSTAGRAM_COOKIES env var.")
+            return COOKIES_FILE
+        except Exception as e:
+            print(f"Error populating cookies.txt from env: {e}")
+
+    return None
+
 INSTA_URL_REGEX = re.compile(
     r"(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:p|reel|reels|tv|share\/(?:reel|p)|stories\/[^\/\s]+)\/([A-Za-z0-9_-]+)",
     re.IGNORECASE
@@ -61,8 +90,9 @@ def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
         "socket_timeout": 20,
     }
 
-    if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
-        ydl_opts["cookiefile"] = COOKIES_FILE
+    cookies_path = ensure_cookies_file()
+    if cookies_path:
+        ydl_opts["cookiefile"] = cookies_path
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -87,8 +117,9 @@ def _download_with_gallery_dl(url: str, task_dir: str) -> Dict[str, Any]:
         "--timeout", "25",
     ]
 
-    if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
-        cmd.extend(["--cookies", COOKIES_FILE])
+    cookies_path = ensure_cookies_file()
+    if cookies_path:
+        cmd.extend(["--cookies", cookies_path])
 
     cmd.append(url)
 
@@ -269,12 +300,8 @@ def _download_sync(url: str) -> Dict[str, Any]:
             downloaded_files = get_valid_files()
 
     if not downloaded_files:
-        if "/reel/" in url.lower() or "/reels/" in url.lower():
-            raise ValueError(
-                "خطا در دریافت ویدیو: این ریلز خصوصی (Private) است یا به علت محدودیت‌های جدید اینستاگرام نیاز به کوکی دارد."
-            )
         raise ValueError(
-            "اینستاگرام برای دانلود این پست یا استوری نیاز به لاگین دارد یا پیج خصوصی (Private) است."
+            "اینستاگرام موقتاً اجازه دسترسی به این محتوا را نداد. در صورت تکرار، نیاز به ورود یا تنظیم کوکی است."
         )
 
     downloaded_files.sort()

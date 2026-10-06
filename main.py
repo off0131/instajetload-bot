@@ -273,7 +273,7 @@ async def handle_instagram_link(message: types.Message):
     except Exception as e:
         logger.error(f"Download error: {e}", exc_info=True)
         err_msg = str(e)
-        if "Private" in err_msg or "login" in err_msg.lower():
+        if "private" in err_msg.lower() or "followers" in err_msg.lower():
             text = (
                 "🔒 <b>پیج یا پست خصوصیه (Private):</b>\n\n"
                 "رفیق، اینستاگرام اجازه دانلود از پیج‌های قفل‌شده و پرایوت رو بدون لاگین نمیده 🥺💔\n"
@@ -284,8 +284,8 @@ async def handle_instagram_link(message: types.Message):
         else:
             text = (
                 "⚠️ <b>یه مشکلی پیش اومد:</b>\n\n"
-                "اینستاگرام موقتاً پاسخی نداد یا این محتوا در دسترسم نیست 🙁\n"
-                "اگه پیج عمومیه، چند لحظه بعد دوباره لینکش رو بفرست تا تلاشمو بکنم! 🔄❤️"
+                "اینستاگرام موقتاً پاسخی نداد یا ترافیک این بخش زیاده 🙁\n"
+                "چند لحظه بعد دوباره لینکش رو بفرست تا تلاشمو بکنم! 🔄❤️"
             )
 
         await status_msg.edit_text(text)
