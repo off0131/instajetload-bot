@@ -82,6 +82,8 @@ def get_media_dimensions(file_path: str):
 def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
     ydl_opts: Dict[str, Any] = {
         "outtmpl": os.path.join(task_dir, "%(id)s_%(playlist_index)s.%(ext)s"),
+        "format": "bestvideo[vcodec!=none]+bestaudio[acodec!=none]/bestvideo+bestaudio/best",
+        "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
@@ -89,6 +91,14 @@ def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
         "retries": 2,
         "socket_timeout": 20,
     }
+
+    try:
+        import imageio_ffmpeg
+        ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+        if ffmpeg_bin and os.path.exists(ffmpeg_bin):
+            ydl_opts["ffmpeg_location"] = os.path.dirname(ffmpeg_bin)
+    except Exception:
+        pass
 
     cookies_path = ensure_cookies_file()
     if cookies_path:
