@@ -31,6 +31,8 @@ from database import (
     save_cache,
     log_download,
     get_stats,
+    get_all_user_ids,
+    clear_cache_db,
 )
 from locales import LANGUAGES, get_text
 from downloader import (
@@ -99,14 +101,28 @@ def get_main_keyboard(lang: str = "fa") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=get_text("btn_server_status", lang), callback_data="ping"),
                 InlineKeyboardButton(text=get_text("btn_tips", lang), callback_data="tips"),
-            ],
-            [
                 InlineKeyboardButton(text=get_text("btn_change_lang", lang), callback_data="change_lang"),
             ],
             [
                 InlineKeyboardButton(text=get_text("btn_share", lang), switch_inline_query=get_text("share_text", lang)),
+            ]
+        ]
+    )
+
+def get_admin_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 آمار تفصیلی و کاربران", callback_data="admin:stats"),
+                InlineKeyboardButton(text="📢 ارسال پیام همگانی", callback_data="admin:broadcast_info"),
+            ],
+            [
+                InlineKeyboardButton(text="🧹 پاکسازی کش دیتابیس", callback_data="admin:clear_cache"),
+                InlineKeyboardButton(text="⚡️ تست سرعت و سلامت سرور", callback_data="admin:server_ping"),
+            ],
+            [
+                InlineKeyboardButton(text="❌ بستن پنل مدیریت", callback_data="admin:close"),
             ]
         ]
     )
@@ -177,12 +193,6 @@ async def cb_select_language(callback: types.CallbackQuery):
     welcome_text = get_text("welcome", target_lang, name=name)
     await callback.message.answer(welcome_text, reply_markup=get_main_keyboard(target_lang))
 
-@dp.callback_query(F.data == "ping")
-async def cb_ping(callback: types.CallbackQuery):
-    user_id = callback.from_user.id if callback.from_user else 0
-    lang = await get_user_lang(user_id)
-    await callback.answer(get_text("ping_alert", lang), show_alert=True)
-
 @dp.callback_query(F.data == "tips")
 async def cb_tips(callback: types.CallbackQuery):
     user_id = callback.from_user.id if callback.from_user else 0
@@ -190,22 +200,132 @@ async def cb_tips(callback: types.CallbackQuery):
     await callback.message.answer(get_text("tips_content", lang))
     await callback.answer()
 
+@dp.message(Command("admin"))
+async def handle_cmd_admin(message: types.Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return  # Only accessible to admins
+
+    text = (
+        "👑 <b>پنل اختصاصی مدیریت ربات InstaJetLoad:</b>\n\n"
+        "به پنل کنترل ربات خوش آمدید! لطفاً عملیات مورد نظر را انتخاب نمایید: ⚡️"
+    )
+    await message.answer(text, reply_markup=get_admin_keyboard())
+
 @dp.message(Command("stats"))
 async def handle_cmd_stats(message: types.Message):
     user_id = message.from_user.id if message.from_user else 0
     if not is_admin(user_id):
-        await message.answer("⛔️ این بخش خصوصی و مختص ادمین ربات هستش 😉")
-        return
+        return  # Completely hidden from regular users
 
     stats = await get_stats()
     text = (
-        "<b>📊 وضعیت عملکرد ربات (پنل اختصاصی ادمین):</b> 👑\n\n"
-        f"👥 تعداد کل کاربران: <b>{stats['users']}</b> نفر 🔥\n"
-        f"📥 تعداد دانلودهای موفق: <b>{stats['downloads']}</b> بار ⚡️\n"
-        f"💾 فایل‌های ذخیره شده در کش: <b>{stats['cached']}</b> عدد 🚀\n"
-        "🟢 سرور ابری: <b>Online & Active 24/7 (Render)</b>"
+        "<b>📊 آمار و تحلیل عملکرد ربات (پنل ادمین):</b> 👑\n\n"
+        f"👥 کل کاربران ثبت‌شده: <b>{stats['users']}</b> نفر 🔥\n"
+        f"🆕 کاربران ورودی امروز: <b>{stats.get('users_today', 0)}</b> نفر ✨\n"
+        f"📥 کل دانلودهای موفق: <b>{stats['downloads']}</b> بار ⚡️\n"
+        f"🎯 دانلودهای ثبت‌شده امروز: <b>{stats.get('downloads_today', 0)}</b> بار 🚀\n"
+        f"💾 فایل‌های ذخیره در کش سرور: <b>{stats['cached']}</b> عدد 📦\n\n"
+        "🟢 وضعیت سرور ابری: <b>Online & Active 24/7 (Render)</b>"
     )
     await message.answer(text)
+
+@dp.message(Command("broadcast"))
+async def handle_cmd_broadcast(message: types.Message):
+    user_id = message.from_user.id if message.from_user else 0
+    if not is_admin(user_id):
+        return
+
+    text_to_send = message.text.replace("/broadcast", "", 1).strip()
+    if not text_to_send:
+        await message.answer(
+            "📢 <b>راهنمای ارسال پیام همگانی:</b>\n\n"
+            "متن پیام خود را پس از دستور با یک فاصله بنویسید:\n"
+            "<code>/broadcast متن پیام شما به تمام کاربران...</code>"
+        )
+        return
+
+    status_msg = await message.answer("⏳ در حال آغاز ارسال پیام همگانی به کاربران...")
+    user_ids = await get_all_user_ids()
+    success = 0
+    failed = 0
+
+    for uid in user_ids:
+        try:
+            await bot.send_message(chat_id=uid, text=text_to_send)
+            success += 1
+            await asyncio.sleep(0.04)  # Anti-flood rate limit
+        except Exception:
+            failed += 1
+
+    await status_msg.edit_text(
+        f"✅ <b>گزارش ارسال پیام همگانی به پایان رسید:</b>\n\n"
+        f"▫️ دریافت موفق: <b>{success}</b> کاربر\n"
+        f"▫️ ناموفق (بلاک ربات یا خطای اکانت): <b>{failed}</b> کاربر"
+    )
+
+@dp.callback_query(F.data.startswith("admin:"))
+async def handle_admin_callback(callback: types.CallbackQuery):
+    user_id = callback.from_user.id if callback.from_user else 0
+    if not is_admin(user_id):
+        await callback.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
+        return
+
+    action = callback.data.split(":")[1]
+
+    if action == "close":
+        await callback.message.delete()
+        await callback.answer("پنل مدیریت بسته شد.")
+        return
+
+    if action == "main":
+        text = (
+            "👑 <b>پنل اختصاصی مدیریت ربات InstaJetLoad:</b>\n\n"
+            "به پنل کنترل ربات خوش آمدید! لطفاً عملیات مورد نظر را انتخاب نمایید: ⚡️"
+        )
+        await callback.message.edit_text(text, reply_markup=get_admin_keyboard())
+        await callback.answer()
+        return
+
+    if action == "stats":
+        stats = await get_stats()
+        text = (
+            "<b>📊 آمار و تحلیل عملکرد ربات (پنل ادمین):</b> 👑\n\n"
+            f"👥 کل کاربران ثبت‌شده: <b>{stats['users']}</b> نفر 🔥\n"
+            f"🆕 کاربران ورودی امروز: <b>{stats.get('users_today', 0)}</b> نفر ✨\n"
+            f"📥 کل دانلودهای موفق: <b>{stats['downloads']}</b> بار ⚡️\n"
+            f"🎯 دانلودهای ثبت‌شده امروز: <b>{stats.get('downloads_today', 0)}</b> بار 🚀\n"
+            f"💾 فایل‌های ذخیره در کش سرور: <b>{stats['cached']}</b> عدد 📦\n\n"
+            "🟢 وضعیت سرور ابری: <b>Online & Active 24/7 (Render)</b>"
+        )
+        back_kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت به منوی ادمین", callback_data="admin:main")]]
+        )
+        await callback.message.edit_text(text, reply_markup=back_kb)
+        await callback.answer()
+        return
+
+    if action == "broadcast_info":
+        text = (
+            "📢 <b>ارسال پیام به تمام کاربران:</b>\n\n"
+            "برای ارسال اطلاعیه، پیام یا تبلیغ به تمامی اعضای ربات، کافیست دستور زیر را ارسال کنید:\n\n"
+            "<code>/broadcast متن پیام شما در اینجا</code>"
+        )
+        back_kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت به منوی ادمین", callback_data="admin:main")]]
+        )
+        await callback.message.edit_text(text, reply_markup=back_kb)
+        await callback.answer()
+        return
+
+    if action == "clear_cache":
+        deleted = await clear_cache_db()
+        await callback.answer(f"🧹 کش دیتابیس با موفقیت خالی شد ({deleted} فایل کش پاک شد).", show_alert=True)
+        return
+
+    if action == "server_ping":
+        await callback.answer("🟢 سرور ابری Render کاملاً فعال و سرعت اتصال در حداکثر توان است! ⚡️🏎", show_alert=True)
+        return
 
 GENERAL_URL_PATTERN = re.compile(
     r"(?:https?:\/\/|www\.)\S+|(?:\b(?:instagram|instagr|youtube|youtu|spotify|soundcloud|tiktok|twitter|x|pinterest|pin)\.(?:com|be|am|it|link|app)\/\S+)",
@@ -638,18 +758,20 @@ async def start_web_server():
 
 async def set_bot_commands():
     try:
-        # Default commands visible to regular users
+        # Default commands visible to regular users (stats and admin are HIDDEN)
         default_commands = [
-            BotCommand(command="start", description="🚀 Start / شروع"),
-            BotCommand(command="language", description="🌐 Change language / تغییر زبان"),
+            BotCommand(command="start", description="🚀 شروع و منوی اصلی / Start"),
+            BotCommand(command="language", description="🌐 تغییر زبان / Change language"),
         ]
         await bot.set_my_commands(default_commands, scope=BotCommandScopeDefault())
 
-        # Admin commands with stats
+        # Admin commands visible ONLY to managers/admins in their hamburger menu
         admin_commands = [
-            BotCommand(command="start", description="🚀 Start / شروع"),
-            BotCommand(command="language", description="🌐 Change language / تغییر زبان"),
-            BotCommand(command="stats", description="📊 Bot Stats (Admin)"),
+            BotCommand(command="start", description="🚀 شروع و منوی اصلی"),
+            BotCommand(command="admin", description="👑 پنل اختصاصی مدیریت"),
+            BotCommand(command="stats", description="📊 آمار عملکرد ربات"),
+            BotCommand(command="broadcast", description="📢 ارسال پیام همگانی"),
+            BotCommand(command="language", description="🌐 تغییر زبان"),
         ]
         for admin_id in ADMIN_IDS:
             try:

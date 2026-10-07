@@ -109,14 +109,35 @@ async def get_stats():
         cursor_users = await db.execute("SELECT COUNT(*) FROM users")
         total_users = (await cursor_users.fetchone())[0]
 
+        cursor_users_today = await db.execute("SELECT COUNT(*) FROM users WHERE date(created_at) = date('now')")
+        users_today = (await cursor_users_today.fetchone())[0]
+
         cursor_downloads = await db.execute("SELECT COUNT(*) FROM downloads_log")
         total_downloads = (await cursor_downloads.fetchone())[0]
+
+        cursor_downloads_today = await db.execute("SELECT COUNT(*) FROM downloads_log WHERE date(downloaded_at) = date('now')")
+        downloads_today = (await cursor_downloads_today.fetchone())[0]
 
         cursor_cached = await db.execute("SELECT COUNT(*) FROM cached_media")
         total_cached = (await cursor_cached.fetchone())[0]
 
         return {
             "users": total_users,
+            "users_today": users_today,
             "downloads": total_downloads,
+            "downloads_today": downloads_today,
             "cached": total_cached
         }
+
+async def get_all_user_ids() -> list:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT user_id FROM users")
+        rows = await cursor.fetchall()
+        return [r[0] for r in rows]
+
+async def clear_cache_db() -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("DELETE FROM cached_media")
+        deleted = cursor.rowcount
+        await db.commit()
+        return deleted
