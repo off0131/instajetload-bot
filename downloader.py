@@ -427,12 +427,22 @@ def cleanup_task_dir(task_dir: str):
 
 # ================= MULTI-PLATFORM DOWNLOADERS =================
 
+# YouTube client configurations to bypass datacenter IP blocks (e.g. Render, AWS, GCP)
+YT_EXTRACTOR_ARGS = {
+    "youtube": {
+        "player_client": ["android", "ios", "visionos", "mweb", "web"]
+    }
+}
+
 def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
     ff_dir = get_ffmpeg_dir()
     ydl_opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
+        "nocheckcertificate": True,
+        "socket_timeout": 20,
+        "extractor_args": YT_EXTRACTOR_ARGS,
     }
     if ff_dir:
         ydl_opts["ffmpeg_location"] = ff_dir
@@ -492,6 +502,9 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
             }],
             "quiet": True,
             "no_warnings": True,
+            "nocheckcertificate": True,
+            "socket_timeout": 25,
+            "extractor_args": YT_EXTRACTOR_ARGS,
         }
         if ff_dir:
             ydl_opts["ffmpeg_location"] = ff_dir
@@ -509,6 +522,9 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
             "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac"]},
             "quiet": True,
             "no_warnings": True,
+            "nocheckcertificate": True,
+            "socket_timeout": 30,
+            "extractor_args": YT_EXTRACTOR_ARGS,
         }
         if ff_dir:
             ydl_opts["ffmpeg_location"] = ff_dir
@@ -594,6 +610,9 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
         }],
         "quiet": True,
         "no_warnings": True,
+        "nocheckcertificate": True,
+        "socket_timeout": 25,
+        "extractor_args": YT_EXTRACTOR_ARGS,
     }
     if ff_dir:
         ydl_opts["ffmpeg_location"] = ff_dir

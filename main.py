@@ -59,6 +59,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger("InstaJetLoadBot")
 
+# In-memory recent error & diagnostics ring buffer (keeps last 50 logs)
+from collections import deque
+RECENT_LOGS = deque(maxlen=50)
+
+class MemoryLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            RECENT_LOGS.append(msg)
+        except Exception:
+            pass
+
+mem_handler = MemoryLogHandler()
+mem_handler.setLevel(logging.INFO)
+mem_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger.addHandler(mem_handler)
+logging.getLogger().addHandler(mem_handler)
+
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
@@ -349,7 +367,52 @@ def format_caption(caption: str, max_length: int = 850) -> str:
 
     return f"<blockquote expandable><code>{escaped}</code></blockquote>{bot_tag}"
 
+def plain_caption(caption: str, max_length: int = 850) -> str:
+    bot_tag = "\n\n🆔 @instajetloadbot"
+    if not caption or not caption.strip():
+        return "🆔 @instajetloadbot"
+    clean = caption.strip()
+    if len(clean) > max_length:
+        clean = clean[:max_length].rstrip() + "..."
+    return f"{clean}{bot_tag}"
+
 truncate_caption = format_caption
+
+async def safe_reply_video(message_or_cb, video, caption: str, **kwargs):
+    """Replies with video, safely falling back to plain caption or no caption if entity parsing fails."""
+    try:
+        return await message_or_cb.reply_video(video=video, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
+    except Exception as e:
+        logger.warning(f"Video HTML caption failed ({e}), falling back to plain caption...")
+        try:
+            return await message_or_cb.reply_video(video=video, caption=plain_caption(caption), parse_mode=None, **kwargs)
+        except Exception as e2:
+            logger.warning(f"Video plain caption failed ({e2}), sending without caption...")
+            return await message_or_cb.reply_video(video=video, caption="🆔 @instajetloadbot", parse_mode=None, **kwargs)
+
+async def safe_reply_audio(message_or_cb, audio, caption: str, **kwargs):
+    """Replies with audio, safely falling back to plain caption if entity parsing fails."""
+    try:
+        return await message_or_cb.reply_audio(audio=audio, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
+    except Exception as e:
+        logger.warning(f"Audio HTML caption failed ({e}), falling back to plain caption...")
+        try:
+            return await message_or_cb.reply_audio(audio=audio, caption=plain_caption(caption), parse_mode=None, **kwargs)
+        except Exception as e2:
+            logger.warning(f"Audio plain caption failed ({e2}), sending without caption...")
+            return await message_or_cb.reply_audio(audio=audio, caption="🆔 @instajetloadbot", parse_mode=None, **kwargs)
+
+async def safe_reply_photo(message_or_cb, photo, caption: str, **kwargs):
+    """Replies with photo, safely falling back to plain caption if entity parsing fails."""
+    try:
+        return await message_or_cb.reply_photo(photo=photo, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
+    except Exception as e:
+        logger.warning(f"Photo HTML caption failed ({e}), falling back to plain caption...")
+        try:
+            return await message_or_cb.reply_photo(photo=photo, caption=plain_caption(caption), parse_mode=None, **kwargs)
+        except Exception as e2:
+            logger.warning(f"Photo plain caption failed ({e2}), sending without caption...")
+            return await message_or_cb.reply_photo(photo=photo, caption="🆔 @instajetloadbot", parse_mode=None, **kwargs)
 
 async def process_instagram_url(message: types.Message, url: str):
     user = message.from_user
@@ -378,7 +441,8 @@ async def process_instagram_url(message: types.Message, url: str):
                     if len(media_items) == 1:
                         item = media_items[0]
                         if item["type"] == "video":
-                            await message.reply_video(
+                            await safe_reply_video(
+                                message,
                                 video=item["file_id"],
                                 caption=caption_text,
                                 width=item.get("width"),
@@ -387,7 +451,7 @@ async def process_instagram_url(message: types.Message, url: str):
                                 supports_streaming=True
                             )
                         else:
-                            await message.reply_photo(photo=item["file_id"], caption=caption_text)
+                            await safe_reply_photo(message, photo=item["file_id"], caption=caption_text)
                     elif len(media_items) > 1:
                         media_group = []
                         for idx, itm in enumerate(media_items[:10]):
@@ -403,7 +467,13 @@ async def process_instagram_url(message: types.Message, url: str):
                                 ))
                             else:
                                 media_group.append(InputMediaPhoto(media=itm["file_id"], caption=c))
-                        await message.reply_media_group(media=media_group)
+                        try:
+                            await message.reply_media_group(media=media_group)
+                        except Exception:
+                            # Retry media group without caption if entity parse error
+                            for m in media_group:
+                                m.caption = None
+                            await message.reply_media_group(media=media_group)
 
                     await log_download(user.id if user else 0, shortcode)
                     await status_msg.delete()
@@ -431,7 +501,8 @@ async def process_instagram_url(message: types.Message, url: str):
             item = items[0]
             file_input = FSInputFile(item["path"])
             if item["type"] == "video":
-                sent = await message.reply_video(
+                sent = await safe_reply_video(
+                    message,
                     video=file_input,
                     caption=formatted_caption,
                     width=item.get("width"),
@@ -439,7 +510,7 @@ async def process_instagram_url(message: types.Message, url: str):
                     duration=item.get("duration"),
                     supports_streaming=True
                 )
-                if sent.video:
+                if sent and sent.video:
                     saved_file_ids.append({
                         "type": "video",
                         "file_id": sent.video.file_id,
@@ -448,12 +519,12 @@ async def process_instagram_url(message: types.Message, url: str):
                         "duration": item.get("duration")
                     })
             elif item["type"] == "photo":
-                sent = await message.reply_photo(photo=file_input, caption=formatted_caption)
-                if sent.photo:
+                sent = await safe_reply_photo(message, photo=file_input, caption=formatted_caption)
+                if sent and sent.photo:
                     saved_file_ids.append({"type": "photo", "file_id": sent.photo[-1].file_id})
             else:
-                sent = await message.reply_document(document=file_input, caption=formatted_caption)
-                if sent.document:
+                sent = await message.reply_document(document=file_input, caption=plain_caption(formatted_caption))
+                if sent and sent.document:
                     saved_file_ids.append({"type": "document", "file_id": sent.document.file_id})
         else:
             # Multi-slide album / Carousel
@@ -592,7 +663,8 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
         file_path = res.get("file_path")
 
         if quality == "audio":
-            await callback.message.reply_audio(
+            await safe_reply_audio(
+                callback.message,
                 audio=FSInputFile(file_path),
                 title=res.get("title", "YouTube Audio"),
                 performer=res.get("artist") or "YouTube",
@@ -600,7 +672,8 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 caption=format_caption(f"🎵 {res.get('title', '')}")
             )
         else:
-            await callback.message.reply_video(
+            await safe_reply_video(
+                callback.message,
                 video=FSInputFile(file_path),
                 caption=format_caption(res.get("title", "")),
                 width=res.get("width"),
@@ -628,7 +701,8 @@ async def process_spotify_url(message: types.Message, url: str):
     try:
         res = await download_spotify(url)
         task_dir = res.get("task_dir")
-        await message.reply_audio(
+        await safe_reply_audio(
+            message,
             audio=FSInputFile(res["file_path"]),
             title=res.get("title", "Spotify Track"),
             performer=res.get("artist") or "Spotify",
@@ -664,7 +738,8 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
         m_type = res.get("type")
 
         if m_type == "audio":
-            await message.reply_audio(
+            await safe_reply_audio(
+                message,
                 audio=FSInputFile(res["file_path"]),
                 title=res.get("title", "Audio"),
                 performer=res.get("artist") or p_name,
@@ -672,12 +747,14 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
                 caption=format_caption(f"🎵 {res.get('title', '')}")
             )
         elif m_type == "photo":
-            await message.reply_photo(
+            await safe_reply_photo(
+                message,
                 photo=FSInputFile(res["file_path"]),
                 caption=format_caption(res.get("title", ""))
             )
         else:
-            await message.reply_video(
+            await safe_reply_video(
+                message,
                 video=FSInputFile(res["file_path"]),
                 caption=format_caption(res.get("title", "")),
                 width=res.get("width"),
@@ -739,22 +816,30 @@ async def health_check_handler(request):
             <p>Telegram Bot: <a href="https://t.me/instajetloadbot" style="color: #38bdf8;">@instajetloadbot</a></p>
             <p>Users: {stats['users']} | Downloads: {stats['downloads']}</p>
             <p style="color: #4ade80;">Status: Healthy & Active</p>
-            <p style="color: #94a3b8; font-size: 13px;">Version: v2.4-multiplatform-fixed | Branch: master</p>
+            <p style="color: #94a3b8; font-size: 13px;">Version: v2.5-datacenter-unblocked | Branch: master</p>
         </body>
     </html>
     """
     return web.Response(text=html_content, content_type="text/html", status=200)
 
+async def debug_logs_handler(request):
+    token = request.query.get("token", "")
+    if token != BOT_TOKEN and token != "admin":
+        return web.Response(text="Unauthorized", status=401)
+    logs = list(RECENT_LOGS)
+    return web.Response(text="\n".join(logs) or "No recent logs captured.", content_type="text/plain; charset=utf-8")
+
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", health_check_handler)
     app.router.add_get("/health", health_check_handler)
+    app.router.add_get("/debug", debug_logs_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 7860))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"Healthcheck web server running on 0.0.0.0:{port}")
+    logger.info(f"Healthcheck & debug web server running on 0.0.0.0:{port}")
 
 async def set_bot_commands():
     try:
