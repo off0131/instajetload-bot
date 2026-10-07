@@ -8,7 +8,6 @@ import subprocess
 import json
 import urllib.request
 import urllib.parse
-import html
 from typing import Optional, Dict, Any, List
 import yt_dlp
 from hachoir.parser import createParser
@@ -21,7 +20,7 @@ COOKIES_FILE = os.path.join(BASE_DIR, "cookies.txt")
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 def setup_ffmpeg():
-    """Ensure ffmpeg is available in PATH."""
+    """Ensure ffmpeg is available in PATH or symlinked."""
     if shutil.which("ffmpeg"):
         return
     try:
@@ -42,6 +41,36 @@ def setup_ffmpeg():
         print(f"setup_ffmpeg error: {e}")
 
 setup_ffmpeg()
+
+def get_ffmpeg_dir() -> Optional[str]:
+    """Returns the directory containing ffmpeg executable for yt-dlp."""
+    setup_ffmpeg()
+    w = shutil.which("ffmpeg")
+    if w:
+        return os.path.dirname(w)
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            return os.path.dirname(exe)
+    except Exception:
+        pass
+    return None
+
+def get_ffmpeg_bin() -> Optional[str]:
+    """Returns the full path to ffmpeg executable."""
+    setup_ffmpeg()
+    w = shutil.which("ffmpeg")
+    if w:
+        return w
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            return exe
+    except Exception:
+        pass
+    return None
 
 def ensure_cookies_file() -> Optional[str]:
     """Ensures cookies file is ready from Render Secret Files, Env Var, or local file."""
@@ -77,50 +106,34 @@ INSTA_URL_REGEX = re.compile(
     re.IGNORECASE
 )
 
-YOUTUBE_REGEX = re.compile(
-    r"(?:https?:\/\/)?(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/|live\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})",
-    re.IGNORECASE
-)
-
-SPOTIFY_REGEX = re.compile(
-    r"(?:https?:\/\/)?(?:open\.)?spotify\.com\/(?:track|album|playlist|intl-[a-z]+\/track)\/([A-Za-z0-9]+)",
-    re.IGNORECASE
-)
-
-SOUNDCLOUD_REGEX = re.compile(
-    r"(?:https?:\/\/)?(?:www\.|on\.)?soundcloud\.com\/\S+",
-    re.IGNORECASE
-)
-
-TIKTOK_REGEX = re.compile(
-    r"(?:https?:\/\/)?(?:www\.|vm\.|vt\.)?tiktok\.com\/\S+",
-    re.IGNORECASE
-)
-
-TWITTER_REGEX = re.compile(
-    r"(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/\S+\/status\/\d+",
-    re.IGNORECASE
-)
-
-PINTEREST_REGEX = re.compile(
-    r"(?:https?:\/\/)?(?:[a-z]{2}\.)?pinterest\.com\/\S+|pin\.it\/\S+",
-    re.IGNORECASE
-)
+def extract_youtube_id(url: str) -> Optional[str]:
+    """Extract 11-character YouTube video ID from any format."""
+    patterns = [
+        r'(?:youtu\.be\/|v\/|vi\/|u\/\w\/|embed\/|shorts\/|live\/)([A-Za-z0-9_-]{11})',
+        r'[?&]v=([A-Za-z0-9_-]{11})',
+        r'youtube\.com\/watch\?(?:[^\s&]+&)*v=([A-Za-z0-9_-]{11})',
+    ]
+    for p in patterns:
+        m = re.search(p, url, re.IGNORECASE)
+        if m:
+            return m.group(1)
+    return None
 
 def detect_platform(url: str) -> str:
-    if INSTA_URL_REGEX.search(url):
+    url_lower = url.lower()
+    if "instagram.com" in url_lower or "instagr.am" in url_lower:
         return "instagram"
-    if YOUTUBE_REGEX.search(url):
+    if "youtube.com" in url_lower or "youtu.be" in url_lower:
         return "youtube"
-    if SPOTIFY_REGEX.search(url):
+    if "spotify.com" in url_lower or "spotify.link" in url_lower or "spotify.app.link" in url_lower:
         return "spotify"
-    if SOUNDCLOUD_REGEX.search(url):
+    if "soundcloud.com" in url_lower:
         return "soundcloud"
-    if TIKTOK_REGEX.search(url):
+    if "tiktok.com" in url_lower:
         return "tiktok"
-    if TWITTER_REGEX.search(url):
+    if "twitter.com" in url_lower or "x.com" in url_lower:
         return "twitter"
-    if PINTEREST_REGEX.search(url):
+    if "pinterest.com" in url_lower or "pin.it" in url_lower:
         return "pinterest"
     return "other"
 
@@ -128,9 +141,9 @@ def extract_shortcode(url: str) -> Optional[str]:
     match = INSTA_URL_REGEX.search(url)
     if match:
         return match.group(1)
-    match_yt = YOUTUBE_REGEX.search(url)
-    if match_yt:
-        return match_yt.group(1)
+    yt_id = extract_youtube_id(url)
+    if yt_id:
+        return yt_id
     return None
 
 def get_media_dimensions(file_path: str):
@@ -153,6 +166,7 @@ def get_media_dimensions(file_path: str):
     return width, height, duration
 
 def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
+    ff_dir = get_ffmpeg_dir()
     ydl_opts: Dict[str, Any] = {
         "outtmpl": os.path.join(task_dir, "%(id)s_%(playlist_index)s.%(ext)s"),
         "format": "b/bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/bestvideo[vcodec^=avc]+bestaudio/best[vcodec^=avc]/best",
@@ -164,14 +178,8 @@ def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
         "retries": 2,
         "socket_timeout": 20,
     }
-
-    try:
-        import imageio_ffmpeg
-        ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
-        if ffmpeg_bin and os.path.exists(ffmpeg_bin):
-            ydl_opts["ffmpeg_location"] = os.path.dirname(ffmpeg_bin)
-    except Exception:
-        pass
+    if ff_dir:
+        ydl_opts["ffmpeg_location"] = ff_dir
 
     cookies_path = ensure_cookies_file()
     if cookies_path:
@@ -197,7 +205,6 @@ def _download_with_gallery_dl(url: str, task_dir: str) -> Dict[str, Any]:
         "--write-metadata",
         "--no-mtime",
         "--retries", "2",
-        "--timeout", "25",
     ]
 
     cookies_path = ensure_cookies_file()
@@ -214,7 +221,7 @@ def _download_with_gallery_dl(url: str, task_dir: str) -> Dict[str, Any]:
             try:
                 with open(mf, "r", encoding="utf-8") as f:
                     meta = json.load(f)
-                    c = meta.get("caption") or meta.get("description") or ""
+                    c = meta.get("caption") or meta.get("description") or meta.get("title") or ""
                     if c and len(c) > len(caption):
                         caption = c
             except Exception:
@@ -225,7 +232,6 @@ def _download_with_gallery_dl(url: str, task_dir: str) -> Dict[str, Any]:
         return {}
 
 def _download_via_embed_scraper(shortcode: str, url: str, task_dir: str) -> Dict[str, Any]:
-    """Extracts direct mp4 video or full images by parsing Instagram embed endpoint without login."""
     caption = ""
     embed_url = f"https://www.instagram.com/p/{shortcode}/embed/captioned/"
     req = urllib.request.Request(
@@ -241,16 +247,14 @@ def _download_via_embed_scraper(shortcode: str, url: str, task_dir: str) -> Dict
         with urllib.request.urlopen(req, timeout=15) as resp:
             content = resp.read().decode("utf-8", errors="ignore")
 
-        # 1. Extract caption if available
         caption_match = re.search(r'class="Caption"[^>]*>(.*?)</div>', content, re.DOTALL)
         if caption_match:
+            import html as py_html
             raw_c = re.sub(r'<[^>]+>', '', caption_match.group(1))
-            caption = html.unescape(raw_c).strip()
+            caption = py_html.unescape(raw_c).strip()
 
-        # 2. Extract video URL if post is a video / reel
         m_video = re.search(r'video_url[\\\"\':\s]+(https:[^\\\"\']+\.mp4[^\\\"\']*)', content)
         if not m_video:
-            # Secondary pattern
             m_video = re.search(r'\"video_url\":\s*\"(https:[^\"]+?\.mp4[^\"]*)\"', content.replace(r'\\\"', '"'))
 
         if m_video:
@@ -263,8 +267,6 @@ def _download_via_embed_scraper(shortcode: str, url: str, task_dir: str) -> Dict
                 .replace(r'\u0025', '%')
                 .replace(r'\u0026', '&')
             )
-            
-            # Download video file
             video_req = urllib.request.Request(
                 clean_url,
                 headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -282,12 +284,11 @@ def _download_via_embed_scraper(shortcode: str, url: str, task_dir: str) -> Dict
     return {"caption": caption}
 
 def _download_uncropped_photo_and_caption(shortcode: str, url: str, task_dir: str) -> Dict[str, Any]:
-    """Downloads original full-resolution uncropped photo (not the 640x640 square crop) and gets caption."""
     if "/reel/" in url.lower() or "/reels/" in url.lower():
         return {}
 
+    import html as py_html
     caption = ""
-    # 1. Fetch caption via OpenGraph metadata
     try:
         clean_url = url.split("?")[0]
         req_og = urllib.request.Request(
@@ -296,7 +297,7 @@ def _download_uncropped_photo_and_caption(shortcode: str, url: str, task_dir: st
         )
         with urllib.request.urlopen(req_og, timeout=12) as r_og:
             page = r_og.read().decode("utf-8")
-        descs = [html.unescape(m) for m in re.findall(r'property="og:description"\s+content="([^"]+)"', page)]
+        descs = [py_html.unescape(m) for m in re.findall(r'property="og:description"\s+content="([^"]+)"', page)]
         if descs:
             caption = descs[0]
             if '": "' in caption:
@@ -304,7 +305,6 @@ def _download_uncropped_photo_and_caption(shortcode: str, url: str, task_dir: st
     except Exception as e:
         print(f"Caption fetch error: {e}")
 
-    # 2. Download original uncropped image (size=l gives full original aspect ratio 1080p, not square)
     try:
         direct_url = f"https://www.instagram.com/p/{shortcode}/media/?size=l"
         req = urllib.request.Request(
@@ -346,7 +346,7 @@ def _download_sync(url: str) -> Dict[str, Any]:
             and not f.endswith(".json")
         ]
 
-    # 1. First attempt: yt-dlp (fastest for native streams)
+    # 1. First attempt: yt-dlp
     try:
         ytdl_res = _download_with_ytdlp(url, task_dir)
         caption = ytdl_res.get("caption", "")
@@ -357,7 +357,7 @@ def _download_sync(url: str) -> Dict[str, Any]:
 
     downloaded_files = get_valid_files()
 
-    # 2. Second attempt: Instagram Embed Scraper (100% bypasses login for public reels and videos)
+    # 2. Second attempt: Instagram Embed Scraper
     if not downloaded_files and shortcode:
         try:
             embed_res = _download_via_embed_scraper(shortcode, url, task_dir)
@@ -367,14 +367,14 @@ def _download_sync(url: str) -> Dict[str, Any]:
         except Exception as e:
             print(f"embed attempt note: {e}")
 
-    # 3. Third attempt: gallery-dl (multi-slide carousels and stories)
+    # 3. Third attempt: gallery-dl
     if not downloaded_files:
         gdl_res = _download_with_gallery_dl(url, task_dir)
         if not caption:
             caption = gdl_res.get("caption", "")
         downloaded_files = get_valid_files()
 
-    # 4. Fourth attempt: Uncropped full-resolution photo scraper
+    # 4. Fourth attempt: Uncropped photo scraper
     if not downloaded_files and shortcode:
         if "/reel/" not in url.lower() and "/reels/" not in url.lower():
             photo_res = _download_uncropped_photo_and_caption(shortcode, url, task_dir)
@@ -383,9 +383,7 @@ def _download_sync(url: str) -> Dict[str, Any]:
             downloaded_files = get_valid_files()
 
     if not downloaded_files:
-        raise ValueError(
-            "اینستاگرام موقتاً اجازه دسترسی به این محتوا را نداد. در صورت تکرار، نیاز به ورود یا تنظیم کوکی است."
-        )
+        raise ValueError("دانلود محتوا از اینستاگرام ناموفق بود.")
 
     downloaded_files.sort()
 
@@ -399,7 +397,6 @@ def _download_sync(url: str) -> Dict[str, Any]:
         else:
             media_type = "document"
 
-        # Extract precise dimensions and duration
         w, h, dur = get_media_dimensions(file_path)
 
         items.append({
@@ -418,7 +415,6 @@ def _download_sync(url: str) -> Dict[str, Any]:
     }
 
 async def download_instagram_media(url: str) -> Dict[str, Any]:
-    """Run download in thread pool to prevent blocking the event loop."""
     return await asyncio.to_thread(_download_sync, url)
 
 def cleanup_task_dir(task_dir: str):
@@ -432,15 +428,21 @@ def cleanup_task_dir(task_dir: str):
 # ================= MULTI-PLATFORM DOWNLOADERS =================
 
 def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
-    setup_ffmpeg()
-    ydl_opts = {
+    ff_dir = get_ffmpeg_dir()
+    ydl_opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
     }
+    if ff_dir:
+        ydl_opts["ffmpeg_location"] = ff_dir
+
+    video_id = extract_youtube_id(url)
+    clean_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        video_id = info.get("id") or ""
+        info = ydl.extract_info(clean_url, download=False)
+        vid = info.get("id") or video_id or ""
         title = info.get("title") or "YouTube Video"
         duration = info.get("duration") or 0
         thumbnail = info.get("thumbnail") or ""
@@ -454,24 +456,24 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
 
         common_resolutions = [1080, 720, 480, 360]
         available_res = [h for h in common_resolutions if any(vh >= h for vh in heights)]
-        if not available_res and heights:
-            available_res = sorted(list(heights), reverse=True)[:3]
+        if not available_res:
+            available_res = [720, 480, 360]
 
         return {
-            "id": video_id,
+            "id": vid,
             "title": title,
             "duration": duration,
             "thumbnail": thumbnail,
             "channel": channel,
             "resolutions": available_res,
-            "url": url,
+            "url": clean_url,
         }
 
 async def get_youtube_info(url: str) -> Dict[str, Any]:
     return await asyncio.to_thread(extract_youtube_info_sync, url)
 
 def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
-    setup_ffmpeg()
+    ff_dir = get_ffmpeg_dir()
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(DOWNLOADS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
@@ -491,11 +493,12 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
             "quiet": True,
             "no_warnings": True,
         }
+        if ff_dir:
+            ydl_opts["ffmpeg_location"] = ff_dir
         media_type = "audio"
     else:
         q_int = int(quality) if quality.isdigit() else 720
         fmt = (
-            f"bestvideo[height<={q_int}][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
             f"bestvideo[height<={q_int}]+bestaudio/"
             f"best[height<={q_int}]/best"
         )
@@ -503,9 +506,12 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
             "format": fmt,
             "outtmpl": outtmpl,
             "merge_output_format": "mp4",
+            "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac"]},
             "quiet": True,
             "no_warnings": True,
         }
+        if ff_dir:
+            ydl_opts["ffmpeg_location"] = ff_dir
         media_type = "video"
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -539,7 +545,7 @@ async def download_youtube(video_id: str, quality: str) -> Dict[str, Any]:
     return await asyncio.to_thread(download_youtube_sync, video_id, quality)
 
 def download_spotify_sync(url: str) -> Dict[str, Any]:
-    setup_ffmpeg()
+    ff_dir = get_ffmpeg_dir()
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(DOWNLOADS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
@@ -547,27 +553,38 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
     track_title = "Spotify Track"
     artist = ""
 
+    # Follow redirects and scrape metadata
     try:
         req = urllib.request.Request(
             url,
             headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
         )
         with urllib.request.urlopen(req, timeout=12) as r:
+            final_url = r.geturl()
             content = r.read().decode("utf-8", errors="ignore")
+
+        import html as py_html
         m_title = re.search(r'<meta property="og:title" content="([^"]+)"', content)
         m_desc = re.search(r'<meta property="og:description" content="([^"]+)"', content)
         if m_title:
-            track_title = html.unescape(m_title.group(1))
+            track_title = py_html.unescape(m_title.group(1))
+        elif "<title>" in content:
+            t_match = re.search(r'<title>(.*?)<\/title>', content)
+            if t_match:
+                raw_t = py_html.unescape(t_match.group(1)).replace(" | Spotify", "")
+                if " - song" in raw_t:
+                    track_title = raw_t.split(" - song")[0].strip()
+
         if m_desc:
-            desc_text = html.unescape(m_desc.group(1))
+            desc_text = py_html.unescape(m_desc.group(1))
             artist = desc_text.split(" · ")[0] if " · " in desc_text else ""
     except Exception as e:
         print(f"Spotify meta fetch note: {e}")
 
     query = f"{artist} - {track_title} official audio" if artist else f"{track_title} audio"
-    outtmpl = os.path.join(task_dir, f"{track_title}.%(ext)s")
+    outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
 
-    ydl_opts = {
+    ydl_opts: Dict[str, Any] = {
         "format": "bestaudio/best",
         "outtmpl": outtmpl,
         "postprocessors": [{
@@ -578,6 +595,8 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
         "quiet": True,
         "no_warnings": True,
     }
+    if ff_dir:
+        ydl_opts["ffmpeg_location"] = ff_dir
 
     dur = 0
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -602,8 +621,225 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
 async def download_spotify(url: str) -> Dict[str, Any]:
     return await asyncio.to_thread(download_spotify_sync, url)
 
+def download_twitter_sync(url: str) -> Dict[str, Any]:
+    """Downloads Twitter/X media via FxTwitter API, gallery-dl, or yt-dlp."""
+    task_id = str(uuid.uuid4())
+    task_dir = os.path.join(DOWNLOADS_DIR, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+
+    title = "Twitter Post"
+    artist = ""
+
+    # 1. Tier 1: FxTwitter API
+    m = re.search(r'status/(\d+)', url)
+    if m:
+        status_id = m.group(1)
+        api_url = f"https://api.fxtwitter.com/i/status/{status_id}"
+        try:
+            req = urllib.request.Request(
+                api_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode())
+
+            tweet = data.get("tweet", {})
+            title = tweet.get("text") or "Twitter Post"
+            author = tweet.get("author", {})
+            artist = author.get("name") or author.get("screen_name") or ""
+            media = tweet.get("media", {})
+
+            videos = media.get("videos") or []
+            photos = media.get("photos") or []
+
+            if videos:
+                vid_url = videos[0].get("url")
+                if vid_url:
+                    out_path = os.path.join(task_dir, f"{status_id}.mp4")
+                    v_req = urllib.request.Request(vid_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(v_req, timeout=35) as v_resp:
+                        with open(out_path, "wb") as f_out:
+                            f_out.write(v_resp.read())
+                    w, h, dur = get_media_dimensions(out_path)
+                    return {
+                        "task_dir": task_dir,
+                        "file_path": out_path,
+                        "type": "video",
+                        "title": title,
+                        "artist": artist,
+                        "duration": dur,
+                        "width": w,
+                        "height": h,
+                    }
+
+            if photos:
+                photo_url = photos[0].get("url")
+                if photo_url:
+                    ext = ".jpg"
+                    if ".png" in photo_url.lower():
+                        ext = ".png"
+                    out_path = os.path.join(task_dir, f"{status_id}{ext}")
+                    p_req = urllib.request.Request(photo_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(p_req, timeout=20) as p_resp:
+                        with open(out_path, "wb") as f_out:
+                            f_out.write(p_resp.read())
+                    w, h, dur = get_media_dimensions(out_path)
+                    return {
+                        "task_dir": task_dir,
+                        "file_path": out_path,
+                        "type": "photo",
+                        "title": title,
+                        "artist": artist,
+                        "duration": dur,
+                        "width": w,
+                        "height": h,
+                    }
+        except Exception as e:
+            print(f"FxTwitter API attempt note: {e}")
+
+    # 2. Tier 2: gallery-dl
+    try:
+        _download_with_gallery_dl(url, task_dir)
+        files = [
+            f for f in glob.glob(os.path.join(task_dir, "**", "*"), recursive=True)
+            if os.path.isfile(f) and not f.endswith(".json") and not f.endswith(".part")
+        ]
+        if files:
+            file_path = files[0]
+            ext = os.path.splitext(file_path)[1].lower()
+            m_type = "video" if ext in [".mp4", ".mov", ".webm"] else "photo"
+            w, h, dur = get_media_dimensions(file_path)
+            return {
+                "task_dir": task_dir,
+                "file_path": file_path,
+                "type": m_type,
+                "title": title,
+                "artist": artist,
+                "duration": dur,
+                "width": w,
+                "height": h,
+            }
+    except Exception as e:
+        print(f"gallery-dl twitter note: {e}")
+
+    # 3. Tier 3: yt-dlp
+    ff_dir = get_ffmpeg_dir()
+    outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
+    ydl_opts: Dict[str, Any] = {
+        "format": "best[ext=mp4]/bestvideo+bestaudio/best",
+        "outtmpl": outtmpl,
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+    }
+    if ff_dir:
+        ydl_opts["ffmpeg_location"] = ff_dir
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        title = info.get("title") or info.get("description") or title
+        artist = info.get("uploader") or artist
+
+    files = [f for f in glob.glob(os.path.join(task_dir, "*")) if os.path.isfile(f)]
+    if not files:
+        raise ValueError("دانلود محتوا از توییتر ناموفق بود.")
+
+    file_path = files[0]
+    ext = os.path.splitext(file_path)[1].lower()
+    m_type = "video" if ext in [".mp4", ".mov", ".webm"] else "photo"
+    w, h, dur = get_media_dimensions(file_path)
+
+    return {
+        "task_dir": task_dir,
+        "file_path": file_path,
+        "type": m_type,
+        "title": title,
+        "artist": artist,
+        "duration": dur,
+        "width": w,
+        "height": h,
+    }
+
+def download_pinterest_sync(url: str) -> Dict[str, Any]:
+    """Downloads Pinterest pin images and videos via gallery-dl or yt-dlp."""
+    task_id = str(uuid.uuid4())
+    task_dir = os.path.join(DOWNLOADS_DIR, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+
+    title = "Pinterest Pin"
+
+    # 1. Tier 1: gallery-dl (handles both images and videos flawlessly)
+    try:
+        res = _download_with_gallery_dl(url, task_dir)
+        if res.get("caption"):
+            title = res["caption"]
+        files = [
+            f for f in glob.glob(os.path.join(task_dir, "**", "*"), recursive=True)
+            if os.path.isfile(f) and not f.endswith(".json") and not f.endswith(".part")
+        ]
+        if files:
+            file_path = files[0]
+            ext = os.path.splitext(file_path)[1].lower()
+            m_type = "video" if ext in [".mp4", ".mov", ".webm"] else "photo"
+            w, h, dur = get_media_dimensions(file_path)
+            return {
+                "task_dir": task_dir,
+                "file_path": file_path,
+                "type": m_type,
+                "title": title,
+                "artist": "Pinterest",
+                "duration": dur,
+                "width": w,
+                "height": h,
+            }
+    except Exception as e:
+        print(f"Pinterest gallery-dl note: {e}")
+
+    # 2. Tier 2: yt-dlp (for video pins)
+    ff_dir = get_ffmpeg_dir()
+    outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
+    ydl_opts: Dict[str, Any] = {
+        "format": "best[ext=mp4]/best",
+        "outtmpl": outtmpl,
+        "quiet": True,
+        "no_warnings": True,
+    }
+    if ff_dir:
+        ydl_opts["ffmpeg_location"] = ff_dir
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            title = info.get("title") or title
+        files = [f for f in glob.glob(os.path.join(task_dir, "*")) if os.path.isfile(f)]
+        if files:
+            file_path = files[0]
+            ext = os.path.splitext(file_path)[1].lower()
+            m_type = "video" if ext in [".mp4", ".mov", ".webm"] else "photo"
+            w, h, dur = get_media_dimensions(file_path)
+            return {
+                "task_dir": task_dir,
+                "file_path": file_path,
+                "type": m_type,
+                "title": title,
+                "artist": "Pinterest",
+                "duration": dur,
+                "width": w,
+                "height": h,
+            }
+    except Exception as e:
+        print(f"Pinterest yt-dlp note: {e}")
+
+    raise ValueError("دانلود محتوا از پینترست ناموفق بود.")
+
 def download_generic_sync(url: str, platform: str) -> Dict[str, Any]:
+    if platform == "twitter":
+        return download_twitter_sync(url)
+    if platform == "pinterest":
+        return download_pinterest_sync(url)
+
     setup_ffmpeg()
+    ff_dir = get_ffmpeg_dir()
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(DOWNLOADS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
@@ -622,16 +858,20 @@ def download_generic_sync(url: str, platform: str) -> Dict[str, Any]:
             "quiet": True,
             "no_warnings": True,
         }
+        if ff_dir:
+            ydl_opts["ffmpeg_location"] = ff_dir
         media_type = "audio"
     else:
-        # TikTok, Twitter, Pinterest, etc.
+        # TikTok and other websites
         ydl_opts = {
-            "format": "b/bestvideo[vcodec^=avc]+bestaudio/best",
+            "format": "best[ext=mp4]/bestvideo+bestaudio/best",
             "outtmpl": outtmpl,
             "merge_output_format": "mp4",
             "quiet": True,
             "no_warnings": True,
         }
+        if ff_dir:
+            ydl_opts["ffmpeg_location"] = ff_dir
         media_type = "video"
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:

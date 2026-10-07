@@ -207,7 +207,10 @@ async def handle_cmd_stats(message: types.Message):
     )
     await message.answer(text)
 
-GENERAL_URL_PATTERN = re.compile(r"https?:\/\/\S+", re.IGNORECASE)
+GENERAL_URL_PATTERN = re.compile(
+    r"(?:https?:\/\/|www\.)\S+|(?:\b(?:instagram|instagr|youtube|youtu|spotify|soundcloud|tiktok|twitter|x|pinterest|pin)\.(?:com|be|am|it|link|app)\/\S+)",
+    re.IGNORECASE
+)
 
 def format_caption(caption: str, max_length: int = 850) -> str:
     bot_tag = "\n\n🆔 @instajetloadbot"
@@ -583,17 +586,20 @@ async def handle_url_message(message: types.Message):
     if not url_match:
         return
 
-    url = url_match.group(0).strip()
-    platform = detect_platform(url)
+    raw_url = url_match.group(0).strip().rstrip(")>.,!?'\";:،")
+    if not raw_url.startswith("http://") and not raw_url.startswith("https://"):
+        raw_url = "https://" + raw_url
+
+    platform = detect_platform(raw_url)
 
     if platform == "instagram":
-        await process_instagram_url(message, url)
+        await process_instagram_url(message, raw_url)
     elif platform == "youtube":
-        await process_youtube_url(message, url)
+        await process_youtube_url(message, raw_url)
     elif platform == "spotify":
-        await process_spotify_url(message, url)
+        await process_spotify_url(message, raw_url)
     else:
-        await process_generic_url(message, url, platform)
+        await process_generic_url(message, raw_url, platform)
 
 @dp.message()
 async def handle_other_messages(message: types.Message):
@@ -613,7 +619,7 @@ async def health_check_handler(request):
             <p>Telegram Bot: <a href="https://t.me/instajetloadbot" style="color: #38bdf8;">@instajetloadbot</a></p>
             <p>Users: {stats['users']} | Downloads: {stats['downloads']}</p>
             <p style="color: #4ade80;">Status: Healthy & Active</p>
-            <p style="color: #94a3b8; font-size: 13px;">Version: v2.3-h264-fullvideo | Branch: master</p>
+            <p style="color: #94a3b8; font-size: 13px;">Version: v2.4-multiplatform-fixed | Branch: master</p>
         </body>
     </html>
     """
