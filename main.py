@@ -827,7 +827,7 @@ async def debug_logs_handler(request):
     if token != BOT_TOKEN and token != "admin":
         return web.Response(text="Unauthorized", status=401)
     logs = list(RECENT_LOGS)
-    return web.Response(text="\n".join(logs) or "No recent logs captured.", content_type="text/plain; charset=utf-8")
+    return web.Response(text="\n".join(logs) or "No recent logs captured.", content_type="text/plain", charset="utf-8")
 
 async def start_web_server():
     app = web.Application()
