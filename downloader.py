@@ -537,7 +537,7 @@ def cleanup_task_dir(task_dir: str):
 # YouTube client configurations to bypass datacenter IP blocks (e.g. Render, AWS, GCP)
 YT_EXTRACTOR_ARGS = {
     "youtube": {
-        "player_client": ["android", "ios", "visionos", "mweb", "web"]
+        "player_client": ["android"]
     }
 }
 
@@ -887,14 +887,41 @@ def download_twitter_sync(url: str) -> Dict[str, Any]:
     }
 
 def download_pinterest_sync(url: str) -> Dict[str, Any]:
-    """Downloads Pinterest pin images and videos via gallery-dl or yt-dlp."""
+    """Downloads Pinterest pin images and videos via RapidAPI, gallery-dl or yt-dlp."""
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(DOWNLOADS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
     title = "Pinterest Pin"
 
-    # 1. Tier 1: gallery-dl (handles both images and videos flawlessly)
+    # 1. Tier 1: RapidAPI
+    try:
+        r_res = _download_via_rapidapi(url, task_dir)
+        if r_res.get("caption"):
+            title = r_res["caption"]
+        files = [
+            f for f in glob.glob(os.path.join(task_dir, "**", "*"), recursive=True)
+            if os.path.isfile(f) and not f.endswith(".json") and not f.endswith(".part")
+        ]
+        if files:
+            file_path = files[0]
+            ext = os.path.splitext(file_path)[1].lower()
+            m_type = "video" if ext in [".mp4", ".mov", ".webm"] else "photo"
+            w, h, dur = get_media_dimensions(file_path)
+            return {
+                "task_dir": task_dir,
+                "file_path": file_path,
+                "type": m_type,
+                "title": title,
+                "artist": "Pinterest",
+                "duration": dur,
+                "width": w,
+                "height": h,
+            }
+    except Exception as e:
+        print(f"Pinterest RapidAPI note: {e}")
+
+    # 2. Tier 2: gallery-dl (handles both images and videos)
     try:
         res = _download_with_gallery_dl(url, task_dir)
         if res.get("caption"):
