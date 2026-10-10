@@ -9,6 +9,7 @@ import json
 import urllib.request
 import urllib.parse
 from typing import Optional, Dict, Any, List
+import requests
 import yt_dlp
 from hachoir.parser import createParser
 from hachoir.metadata import extractMetadata
@@ -328,6 +329,101 @@ def _download_uncropped_photo_and_caption(shortcode: str, url: str, task_dir: st
 
     return {"caption": caption}
 
+RAPIDAPI_HOST = "instagram-downloader-download-instagram-stories-videos4.p.rapidapi.com"
+DEFAULT_RAPIDAPI_KEYS = [
+    "666b9e2849msh0fd5d0dae9f0734p15da1cjsnb87cf7ce902f"
+]
+_rapidapi_key_idx = 0
+
+def get_rapidapi_keys() -> List[str]:
+    raw = os.environ.get("RAPIDAPI_KEYS", "") or os.environ.get("RAPIDAPI_KEY", "")
+    if raw.strip():
+        keys = [k.strip() for k in raw.split(",") if k.strip()]
+        if keys:
+            return keys
+    return list(DEFAULT_RAPIDAPI_KEYS)
+
+def get_next_rapidapi_key() -> str:
+    global _rapidapi_key_idx
+    keys = get_rapidapi_keys()
+    if not keys:
+        return ""
+    key = keys[_rapidapi_key_idx % len(keys)]
+    _rapidapi_key_idx = (_rapidapi_key_idx + 1) % len(keys)
+    return key
+
+def _download_via_rapidapi(url: str, task_dir: str) -> Dict[str, Any]:
+    """Downloads Instagram posts, reels, stories, or albums via RapidAPI key pool."""
+    keys = get_rapidapi_keys()
+    if not keys:
+        return {}
+
+    endpoint = f"https://{RAPIDAPI_HOST}/convert"
+    
+    # Try keys in rotation if one hits rate limits or quota
+    for attempt in range(len(keys)):
+        api_key = get_next_rapidapi_key()
+        headers = {
+            "x-rapidapi-key": api_key,
+            "x-rapidapi-host": RAPIDAPI_HOST,
+            "accept": "application/json"
+        }
+        params = {"url": url}
+        
+        try:
+            resp = requests.get(endpoint, headers=headers, params=params, timeout=25)
+            if resp.status_code == 429:
+                print(f"[RapidAPI] Key {api_key[:6]}... rate-limited (429). Rotating...")
+                continue
+            if resp.status_code != 200:
+                print(f"[RapidAPI] HTTP {resp.status_code}: {resp.text[:150]}")
+                continue
+
+            data = resp.json()
+            if not isinstance(data, dict):
+                continue
+            if data.get("error"):
+                print(f"[RapidAPI] Error response: {data.get('error')}")
+                continue
+
+            media_list = data.get("media") or []
+            if not media_list and data.get("url"):
+                media_list = [data]
+            if not media_list:
+                continue
+
+            caption = data.get("title") or data.get("caption") or ""
+            downloaded_count = 0
+
+            for idx, item in enumerate(media_list):
+                if not isinstance(item, dict):
+                    continue
+                file_url = item.get("url")
+                if not file_url:
+                    continue
+                item_type = str(item.get("type", "")).lower()
+                ext = ".mp4" if "video" in item_type else ".jpg"
+                out_path = os.path.join(task_dir, f"media_{idx + 1:02d}{ext}")
+
+                with requests.get(file_url, stream=True, timeout=30) as r:
+                    r.raise_for_status()
+                    with open(out_path, "wb") as f_out:
+                        for chunk in r.iter_content(chunk_size=65536):
+                            if chunk:
+                                f_out.write(chunk)
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+                    downloaded_count += 1
+
+            if downloaded_count > 0:
+                print(f"[RapidAPI] Successfully downloaded {downloaded_count} media files via key {api_key[:6]}...")
+                return {"caption": caption, "source": "rapidapi"}
+
+        except Exception as e:
+            print(f"[RapidAPI] Request attempt exception: {e}")
+            continue
+
+    return {}
+
 def _download_sync(url: str) -> Dict[str, Any]:
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(DOWNLOADS_DIR, task_id)
@@ -346,16 +442,27 @@ def _download_sync(url: str) -> Dict[str, Any]:
             and not f.endswith(".json")
         ]
 
-    # 1. First attempt: yt-dlp
+    # 1. Primary attempt: RapidAPI (High-speed, unblocked, no cookies needed)
     try:
-        ytdl_res = _download_with_ytdlp(url, task_dir)
-        caption = ytdl_res.get("caption", "")
-        if ytdl_res.get("shortcode"):
-            shortcode = ytdl_res["shortcode"]
+        rapid_res = _download_via_rapidapi(url, task_dir)
+        if rapid_res:
+            caption = rapid_res.get("caption", "")
     except Exception as e:
-        print(f"yt-dlp attempt note: {e}")
+        print(f"RapidAPI attempt note: {e}")
 
     downloaded_files = get_valid_files()
+
+    # 2. Second attempt: yt-dlp (Fallback)
+    if not downloaded_files:
+        try:
+            ytdl_res = _download_with_ytdlp(url, task_dir)
+            caption = ytdl_res.get("caption", "")
+            if ytdl_res.get("shortcode"):
+                shortcode = ytdl_res["shortcode"]
+        except Exception as e:
+            print(f"yt-dlp attempt note: {e}")
+
+        downloaded_files = get_valid_files()
 
     # 2. Second attempt: Instagram Embed Scraper
     if not downloaded_files and shortcode:
