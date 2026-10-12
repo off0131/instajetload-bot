@@ -725,11 +725,31 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
         ydl_opts["ffmpeg_location"] = ff_dir
 
     dur = 0
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-        entries = info.get("entries") or []
-        if entries:
-            dur = entries[0].get("duration") or 0
+    downloaded = False
+    sc_query = f"{artist} - {track_title}" if artist else track_title
+
+    # 1. Search SoundCloud first (100% unblocked on cloud datacenter IPs, high audio quality)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"scsearch1:{sc_query}", download=True)
+            entries = info.get("entries") or []
+            if entries:
+                dur = entries[0].get("duration") or 0
+                downloaded = True
+    except Exception as e_sc:
+        print(f"SoundCloud search fallback: {e_sc}")
+
+    # 2. Fallback to YouTube if SoundCloud failed
+    if not downloaded:
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+                entries = info.get("entries") or []
+                if entries:
+                    dur = entries[0].get("duration") or 0
+                    downloaded = True
+        except Exception as e_yt:
+            print(f"YouTube search fallback: {e_yt}")
 
     files = [f for f in glob.glob(os.path.join(task_dir, "*")) if os.path.isfile(f) and f.endswith(".mp3")]
     if not files:
