@@ -537,9 +537,10 @@ def cleanup_task_dir(task_dir: str):
 # YouTube client configurations to bypass datacenter IP blocks (e.g. Render, AWS, GCP)
 YT_EXTRACTOR_ARGS = {
     "youtube": {
-        "player_client": ["android", "ios"]
+        "player_client": ["android_testsuite", "android", "tv_embedded"]
     }
 }
+
 
 
 def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
@@ -623,8 +624,10 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
         q_int = int(quality) if quality.isdigit() else 720
         fmt = (
             f"bestvideo[height<={q_int}]+bestaudio/"
-            f"best[height<={q_int}]/best"
+            f"best[height<={q_int}]/"
+            f"18/best"
         )
+
         ydl_opts = {
             "format": fmt,
             "outtmpl": outtmpl,
