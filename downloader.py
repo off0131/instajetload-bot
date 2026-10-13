@@ -79,9 +79,6 @@ def ensure_cookies_file() -> Optional[str]:
     if os.path.exists(render_secrets_path) and os.path.getsize(render_secrets_path) > 0:
         return render_secrets_path
 
-    if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
-        return COOKIES_FILE
-
     env_cookies = os.environ.get("SESSION_COOKIES") or os.environ.get("YOUTUBE_COOKIES") or os.environ.get("INSTAGRAM_COOKIES")
     if env_cookies and env_cookies.strip():
         try:
@@ -100,7 +97,23 @@ def ensure_cookies_file() -> Optional[str]:
         except Exception as e:
             print(f"Error populating cookies.txt from env: {e}")
 
+    if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
+        return COOKIES_FILE
 
+    return None
+
+def get_youtube_cookies_file() -> Optional[str]:
+    """Returns cookies file ONLY if it contains valid logged-in YouTube session cookies."""
+    for p in ["/etc/secrets/cookies.txt", COOKIES_FILE]:
+        if os.path.exists(p) and os.path.getsize(p) > 50:
+            try:
+                with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                    # Check for exact tab-separated login cookie names in Netscape format
+                    if re.search(r"\t(LOGIN_INFO|__Secure-1PSID|__Secure-3PSID|SID)\t", content):
+                        return p
+            except Exception:
+                pass
     return None
 
 INSTA_URL_REGEX = re.compile(
@@ -538,34 +551,35 @@ def cleanup_task_dir(task_dir: str):
 # YouTube client configurations to bypass datacenter IP blocks (e.g. Render, AWS, GCP)
 YT_EXTRACTOR_ARGS = {
     "youtube": {
-        "player_client": ["android_testsuite", "android", "tv_embedded"]
+        "player_client": ["android"]
     }
 }
 
-
-
 def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
     ff_dir = get_ffmpeg_dir()
-    ydl_opts: Dict[str, Any] = {
-        "quiet": True,
-        "no_warnings": True,
-        "extract_flat": False,
-        "nocheckcertificate": True,
-        "socket_timeout": 20,
-    }
-    cookie_path = ensure_cookies_file()
-    if cookie_path:
-        ydl_opts["cookiefile"] = cookie_path
-    if ff_dir:
-        ydl_opts["ffmpeg_location"] = ff_dir
-
-
-
     video_id = extract_youtube_id(url)
     clean_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
+    proxy = os.environ.get("YOUTUBE_PROXY") or os.environ.get("HTTP_PROXY") or None
+    yt_cookies = get_youtube_cookies_file()
 
+    # Attempt 1: Modern visionos/web with Node.js JS runtime
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl_opts_1: Dict[str, Any] = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": False,
+            "nocheckcertificate": True,
+            "socket_timeout": 20,
+            "js_runtimes": {"node": {}},
+        }
+        if yt_cookies:
+            ydl_opts_1["cookiefile"] = yt_cookies
+        if ff_dir:
+            ydl_opts_1["ffmpeg_location"] = ff_dir
+        if proxy:
+            ydl_opts_1["proxy"] = proxy
+
+        with yt_dlp.YoutubeDL(ydl_opts_1) as ydl:
             info = ydl.extract_info(clean_url, download=False)
             vid = info.get("id") or video_id or ""
             title = info.get("title") or "YouTube Video"
@@ -593,28 +607,63 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
                 "resolutions": available_res,
                 "url": clean_url,
             }
-    except Exception as e_yt:
-        # Fallback to official YouTube oEmbed API (100% unblocked on all cloud/datacenter IPs)
-        print(f"yt-dlp extract note: {e_yt}, falling back to oEmbed...")
-        if video_id:
-            try:
-                oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
-                r = requests.get(oembed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
-                if r.status_code == 200:
-                    data = r.json()
-                    return {
-                        "id": video_id,
-                        "title": data.get("title") or "YouTube Video",
-                        "duration": 0,
-                        "thumbnail": data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-                        "channel": data.get("author_name") or "YouTube",
-                        "resolutions": [720, 480, 360],
-                        "url": clean_url,
-                    }
-            except Exception as e_oembed:
-                print(f"oEmbed fallback error: {e_oembed}")
-        raise e_yt
+    except Exception as e_node:
+        print(f"Visionos/Node extraction failed: {e_node}, attempting Android client...")
 
+    # Attempt 2: Android client (works without JS runtime and bypasses datacenter web block)
+    try:
+        ydl_opts_android: Dict[str, Any] = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": False,
+            "nocheckcertificate": True,
+            "socket_timeout": 20,
+            "extractor_args": {"youtube": {"player_client": ["android"]}},
+        }
+        if ff_dir:
+            ydl_opts_android["ffmpeg_location"] = ff_dir
+        if proxy:
+            ydl_opts_android["proxy"] = proxy
+
+        with yt_dlp.YoutubeDL(ydl_opts_android) as ydl:
+            info = ydl.extract_info(clean_url, download=False)
+            vid = info.get("id") or video_id or ""
+            title = info.get("title") or "YouTube Video"
+            duration = info.get("duration") or 0
+            thumbnail = info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+            channel = info.get("uploader") or info.get("channel") or ""
+            return {
+                "id": vid,
+                "title": title,
+                "duration": duration,
+                "thumbnail": thumbnail,
+                "channel": channel,
+                "resolutions": [720, 480, 360],
+                "url": clean_url,
+            }
+    except Exception as e_android:
+        print(f"Android extraction failed: {e_android}, falling back to oEmbed...")
+
+    # Attempt 3: Official YouTube oEmbed API (100% unblocked on all cloud/datacenter IPs)
+    if video_id:
+        try:
+            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            r = requests.get(oembed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+            if r.status_code == 200:
+                data = r.json()
+                return {
+                    "id": video_id,
+                    "title": data.get("title") or "YouTube Video",
+                    "duration": 0,
+                    "thumbnail": data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                    "channel": data.get("author_name") or "YouTube",
+                    "resolutions": [720, 480, 360],
+                    "url": clean_url,
+                }
+        except Exception as e_oembed:
+            print(f"oEmbed fallback error: {e_oembed}")
+
+    raise ValueError("امکان دریافت اطلاعات ویدیو از یوتیوب وجود ندارد.")
 
 async def get_youtube_info(url: str) -> Dict[str, Any]:
     return await asyncio.to_thread(extract_youtube_info_sync, url)
@@ -627,64 +676,119 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
+    proxy = os.environ.get("YOUTUBE_PROXY") or os.environ.get("HTTP_PROXY") or None
+    yt_cookies = get_youtube_cookies_file()
 
-    cookie_path = ensure_cookies_file()
-    if quality == "audio":
-        ydl_opts = {
-            "format": "ba/b",
-            "outtmpl": outtmpl,
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }],
-            "retries": 10,
-            "fragment_retries": 10,
-            "quiet": True,
-            "no_warnings": True,
-            "nocheckcertificate": True,
-            "socket_timeout": 35,
-            "extractor_args": YT_EXTRACTOR_ARGS,
-        }
-        if cookie_path:
-            ydl_opts["cookiefile"] = cookie_path
+    media_type = "audio" if quality == "audio" else "video"
+    q_int = int(quality) if quality.isdigit() else 720
+
+    downloaded = False
+    title = "YouTube Video"
+    duration = 0
+    channel = ""
+
+    # Strategy 1: High-resolution download via visionos/web with Node.js JS solver
+    try:
+        if quality == "audio":
+            ydl_opts_1 = {
+                "format": "ba/b",
+                "outtmpl": outtmpl,
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }],
+                "retries": 5,
+                "fragment_retries": 5,
+                "quiet": True,
+                "no_warnings": True,
+                "nocheckcertificate": True,
+                "socket_timeout": 35,
+                "js_runtimes": {"node": {}},
+            }
+        else:
+            fmt_1 = (
+                f"bv*[height<={q_int}]+ba/"
+                f"b[height<={q_int}]/"
+                f"bestvideo[height<={q_int}]+bestaudio/"
+                f"best[height<={q_int}]"
+            )
+            ydl_opts_1 = {
+                "format": fmt_1,
+                "outtmpl": outtmpl,
+                "merge_output_format": "mp4",
+                "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac"]},
+                "retries": 5,
+                "fragment_retries": 5,
+                "quiet": True,
+                "no_warnings": True,
+                "nocheckcertificate": True,
+                "socket_timeout": 35,
+                "js_runtimes": {"node": {}},
+            }
+
+        if yt_cookies:
+            ydl_opts_1["cookiefile"] = yt_cookies
         if ff_dir:
-            ydl_opts["ffmpeg_location"] = ff_dir
-        media_type = "audio"
-    else:
-        q_int = int(quality) if quality.isdigit() else 720
-        fmt = (
-            f"bestvideo[height<={q_int}]+bestaudio/"
-            f"best[height<={q_int}]/"
-            f"18/best"
-        )
+            ydl_opts_1["ffmpeg_location"] = ff_dir
+        if proxy:
+            ydl_opts_1["proxy"] = proxy
 
-        ydl_opts = {
-            "format": fmt,
-            "outtmpl": outtmpl,
-            "merge_output_format": "mp4",
-            "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac"]},
-            "retries": 10,
-            "fragment_retries": 10,
-            "quiet": True,
-            "no_warnings": True,
-            "nocheckcertificate": True,
-            "socket_timeout": 35,
-            "extractor_args": YT_EXTRACTOR_ARGS,
-        }
-        if cookie_path:
-            ydl_opts["cookiefile"] = cookie_path
-        if ff_dir:
-            ydl_opts["ffmpeg_location"] = ff_dir
-        media_type = "video"
+        with yt_dlp.YoutubeDL(ydl_opts_1) as ydl:
+            info = ydl.extract_info(url, download=True)
+            title = info.get("title") or title
+            duration = info.get("duration") or 0
+            channel = info.get("uploader") or info.get("channel") or ""
+            downloaded = True
+    except Exception as e1:
+        print(f"[YouTube DL] Strategy 1 (visionos/node) note: {e1}, failing over to Strategy 2 (android)...")
 
+    # Strategy 2: Bulletproof Android client (bypasses datacenter web bot guard, format 18/best, no cookies)
+    if not downloaded:
+        try:
+            if quality == "audio":
+                ydl_opts_2 = {
+                    "format": "18/best/ba",
+                    "outtmpl": outtmpl,
+                    "postprocessors": [{
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }],
+                    "retries": 5,
+                    "fragment_retries": 5,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "nocheckcertificate": True,
+                    "socket_timeout": 35,
+                    "extractor_args": {"youtube": {"player_client": ["android"]}},
+                }
+            else:
+                ydl_opts_2 = {
+                    "format": "18/best",
+                    "outtmpl": outtmpl,
+                    "merge_output_format": "mp4",
+                    "retries": 5,
+                    "fragment_retries": 5,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "nocheckcertificate": True,
+                    "socket_timeout": 35,
+                    "extractor_args": {"youtube": {"player_client": ["android"]}},
+                }
+            if ff_dir:
+                ydl_opts_2["ffmpeg_location"] = ff_dir
+            if proxy:
+                ydl_opts_2["proxy"] = proxy
 
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        title = info.get("title") or "YouTube Video"
-        duration = info.get("duration") or 0
-        channel = info.get("uploader") or info.get("channel") or ""
+            with yt_dlp.YoutubeDL(ydl_opts_2) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get("title") or title
+                duration = info.get("duration") or duration
+                channel = info.get("uploader") or info.get("channel") or channel
+                downloaded = True
+        except Exception as e2:
+            print(f"[YouTube DL] Strategy 2 (android) error: {e2}")
 
     files = [
         f for f in glob.glob(os.path.join(task_dir, "*"))
@@ -715,6 +819,7 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(DOWNLOADS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
+    proxy = os.environ.get("YOUTUBE_PROXY") or os.environ.get("HTTP_PROXY") or None
 
     track_title = "Spotify Track"
     artist = ""
@@ -726,60 +831,68 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
             headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
         )
         with urllib.request.urlopen(req, timeout=12) as r:
-            final_url = r.geturl()
             content = r.read().decode("utf-8", errors="ignore")
 
         import html as py_html
         m_title = re.search(r'<meta property="og:title" content="([^"]+)"', content)
         m_desc = re.search(r'<meta property="og:description" content="([^"]+)"', content)
         if m_title:
-            track_title = py_html.unescape(m_title.group(1))
-        elif "<title>" in content:
-            t_match = re.search(r'<title>(.*?)<\/title>', content)
-            if t_match:
-                raw_t = py_html.unescape(t_match.group(1)).replace(" | Spotify", "")
-                if " - song" in raw_t:
-                    track_title = raw_t.split(" - song")[0].strip()
+            raw_title = py_html.unescape(m_title.group(1))
+            if " | Spotify" in raw_title:
+                raw_title = raw_title.replace(" | Spotify", "")
+            if " - Single by " in raw_title:
+                parts = raw_title.split(" - Single by ")
+                track_title = parts[0].strip()
+                if not artist and len(parts) > 1:
+                    artist = parts[1].strip()
+            elif " - song by " in raw_title:
+                parts = raw_title.split(" - song by ")
+                track_title = parts[0].strip()
+                if not artist and len(parts) > 1:
+                    artist = parts[1].strip()
+            elif " - song and lyrics by " in raw_title:
+                parts = raw_title.split(" - song and lyrics by ")
+                track_title = parts[0].strip()
+                if not artist and len(parts) > 1:
+                    artist = parts[1].strip()
+            else:
+                track_title = raw_title
 
-        if m_desc:
+        if m_desc and not artist:
             desc_text = py_html.unescape(m_desc.group(1))
             artist = desc_text.split(" · ")[0] if " · " in desc_text else ""
     except Exception as e:
         print(f"Spotify meta fetch note: {e}")
 
-    query = f"{artist} - {track_title} official audio" if artist else f"{track_title} audio"
+    query = f"{artist} - {track_title}" if artist else track_title
     outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
-
-    ydl_opts: Dict[str, Any] = {
-        "format": "ba/b",
-        "outtmpl": outtmpl,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "320",
-        }],
-        "retries": 10,
-        "fragment_retries": 10,
-        "quiet": True,
-        "no_warnings": True,
-        "nocheckcertificate": True,
-        "socket_timeout": 35,
-        "extractor_args": YT_EXTRACTOR_ARGS,
-    }
-    if ff_dir:
-        ydl_opts["ffmpeg_location"] = ff_dir
-
 
     dur = 0
     downloaded = False
-    sc_query = f"{artist} - {track_title}" if artist else track_title
 
-    # 1. Search SoundCloud first (if not DRM protected)
+    # 1. Search SoundCloud first (standard streaming audio bestaudio/best, no login required)
     try:
-        sc_opts = dict(ydl_opts)
-        sc_opts["socket_timeout"] = 20
+        sc_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": outtmpl,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "320",
+            }],
+            "retries": 3,
+            "quiet": True,
+            "no_warnings": True,
+            "nocheckcertificate": True,
+            "socket_timeout": 20,
+        }
+        if ff_dir:
+            sc_opts["ffmpeg_location"] = ff_dir
+        if proxy:
+            sc_opts["proxy"] = proxy
+
         with yt_dlp.YoutubeDL(sc_opts) as ydl:
-            info = ydl.extract_info(f"scsearch1:{sc_query}", download=True)
+            info = ydl.extract_info(f"scsearch1:{query}", download=True)
             entries = info.get("entries") or []
             if entries:
                 dur = entries[0].get("duration") or 0
@@ -787,13 +900,31 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
     except Exception as e_sc:
         print(f"SoundCloud search fallback: {e_sc}")
 
-    # 2. Fallback to YouTube if SoundCloud failed
+    # 2. Fallback to YouTube with Android client (unblocked on datacenter IPs)
     if not downloaded:
-        queries_to_try = [query, f"{track_title} audio", f"{artist} {track_title}"]
+        queries_to_try = [f"{query} audio", f"{query} official audio", query]
         for q in queries_to_try:
             try:
-                yt_opts = dict(ydl_opts)
-                yt_opts["socket_timeout"] = 35
+                yt_opts = {
+                    "format": "18/best/ba",
+                    "outtmpl": outtmpl,
+                    "postprocessors": [{
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "320",
+                    }],
+                    "retries": 3,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "nocheckcertificate": True,
+                    "socket_timeout": 30,
+                    "extractor_args": {"youtube": {"player_client": ["android"]}},
+                }
+                if ff_dir:
+                    yt_opts["ffmpeg_location"] = ff_dir
+                if proxy:
+                    yt_opts["proxy"] = proxy
+
                 with yt_dlp.YoutubeDL(yt_opts) as ydl:
                     info = ydl.extract_info(f"ytsearch1:{q}", download=True)
                     entries = info.get("entries") or []
@@ -806,7 +937,6 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
 
     files = [f for f in glob.glob(os.path.join(task_dir, "*")) if os.path.isfile(f) and f.endswith(".mp3")]
     if not files:
-        # Check if any audio/video file exists and convert it to mp3 if needed
         all_downloaded = [
             f for f in glob.glob(os.path.join(task_dir, "*"))
             if os.path.isfile(f) and not f.endswith(".part") and not f.endswith(".ytdl")
