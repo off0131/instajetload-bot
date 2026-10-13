@@ -537,9 +537,10 @@ def cleanup_task_dir(task_dir: str):
 # YouTube client configurations to bypass datacenter IP blocks (e.g. Render, AWS, GCP)
 YT_EXTRACTOR_ARGS = {
     "youtube": {
-        "player_client": ["android"]
+        "player_client": ["android", "ios"]
     }
 }
+
 
 def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
     ff_dir = get_ffmpeg_dir()
@@ -600,17 +601,19 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
 
     if quality == "audio":
         ydl_opts = {
-            "format": "bestaudio/best",
+            "format": "ba/b",
             "outtmpl": outtmpl,
             "postprocessors": [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192",
             }],
+            "retries": 10,
+            "fragment_retries": 10,
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
-            "socket_timeout": 25,
+            "socket_timeout": 35,
             "extractor_args": YT_EXTRACTOR_ARGS,
         }
         if ff_dir:
@@ -627,15 +630,18 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
             "outtmpl": outtmpl,
             "merge_output_format": "mp4",
             "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac"]},
+            "retries": 10,
+            "fragment_retries": 10,
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
-            "socket_timeout": 30,
+            "socket_timeout": 35,
             "extractor_args": YT_EXTRACTOR_ARGS,
         }
         if ff_dir:
             ydl_opts["ffmpeg_location"] = ff_dir
         media_type = "video"
+
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -708,29 +714,34 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
     outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
 
     ydl_opts: Dict[str, Any] = {
-        "format": "bestaudio/best",
+        "format": "ba/b",
         "outtmpl": outtmpl,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
             "preferredquality": "320",
         }],
+        "retries": 10,
+        "fragment_retries": 10,
         "quiet": True,
         "no_warnings": True,
         "nocheckcertificate": True,
-        "socket_timeout": 25,
+        "socket_timeout": 35,
         "extractor_args": YT_EXTRACTOR_ARGS,
     }
     if ff_dir:
         ydl_opts["ffmpeg_location"] = ff_dir
 
+
     dur = 0
     downloaded = False
     sc_query = f"{artist} - {track_title}" if artist else track_title
 
-    # 1. Search SoundCloud first (100% unblocked on cloud datacenter IPs, high audio quality)
+    # 1. Search SoundCloud first (if not DRM protected)
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        sc_opts = dict(ydl_opts)
+        sc_opts["socket_timeout"] = 20
+        with yt_dlp.YoutubeDL(sc_opts) as ydl:
             info = ydl.extract_info(f"scsearch1:{sc_query}", download=True)
             entries = info.get("entries") or []
             if entries:
@@ -741,17 +752,44 @@ def download_spotify_sync(url: str) -> Dict[str, Any]:
 
     # 2. Fallback to YouTube if SoundCloud failed
     if not downloaded:
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-                entries = info.get("entries") or []
-                if entries:
-                    dur = entries[0].get("duration") or 0
-                    downloaded = True
-        except Exception as e_yt:
-            print(f"YouTube search fallback: {e_yt}")
+        queries_to_try = [query, f"{track_title} audio", f"{artist} {track_title}"]
+        for q in queries_to_try:
+            try:
+                yt_opts = dict(ydl_opts)
+                yt_opts["socket_timeout"] = 35
+                with yt_dlp.YoutubeDL(yt_opts) as ydl:
+                    info = ydl.extract_info(f"ytsearch1:{q}", download=True)
+                    entries = info.get("entries") or []
+                    if entries:
+                        dur = entries[0].get("duration") or 0
+                        downloaded = True
+                        break
+            except Exception as e_yt:
+                print(f"YouTube search fallback for '{q}': {e_yt}")
 
     files = [f for f in glob.glob(os.path.join(task_dir, "*")) if os.path.isfile(f) and f.endswith(".mp3")]
+    if not files:
+        # Check if any audio/video file exists and convert it to mp3 if needed
+        all_downloaded = [
+            f for f in glob.glob(os.path.join(task_dir, "*"))
+            if os.path.isfile(f) and not f.endswith(".part") and not f.endswith(".ytdl")
+        ]
+        if all_downloaded:
+            raw_f = all_downloaded[0]
+            target_mp3 = os.path.join(task_dir, f"{track_title}.mp3")
+            ffmpeg_exe = get_ffmpeg_bin() or "ffmpeg"
+            try:
+                subprocess.run(
+                    [ffmpeg_exe, "-y", "-i", raw_f, "-vn", "-b:a", "192k", target_mp3],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True
+                )
+                if os.path.exists(target_mp3):
+                    files = [target_mp3]
+            except Exception as e_ff:
+                print(f"Manual FFmpeg convert error: {e_ff}")
+
     if not files:
         raise ValueError("دانلود موزیک از اسپاتیفای با خطا مواجه شد.")
 

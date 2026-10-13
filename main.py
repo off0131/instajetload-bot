@@ -662,6 +662,14 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
         task_dir = res.get("task_dir")
         file_path = res.get("file_path")
 
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if os.path.exists(file_path) else 0
+        if file_size_mb > 49.5:
+            await status_msg.edit_text(
+                f"⚠️ <b>حجم فایل بیش از حد مجاز تلگرام است ({file_size_mb:.1f} MB):</b>\n\n"
+                "به دلیل محدودیت ربات‌های تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت قابل ارسال مستقیم نیستند. لطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید 🔄"
+            )
+            return
+
         if quality == "audio":
             await safe_reply_audio(
                 callback.message,
@@ -682,6 +690,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 supports_streaming=True
             )
 
+
         if callback.from_user:
             await log_download(callback.from_user.id, f"yt_{video_id}")
         await status_msg.delete()
@@ -701,9 +710,18 @@ async def process_spotify_url(message: types.Message, url: str):
     try:
         res = await download_spotify(url)
         task_dir = res.get("task_dir")
+        file_path = res.get("file_path")
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if file_path and os.path.exists(file_path) else 0
+        if file_size_mb > 49.5:
+            await status_msg.edit_text(
+                f"⚠️ <b>حجم فایل صوتی بیش از حد مجاز تلگرام است ({file_size_mb:.1f} MB):</b>\n\n"
+                "به دلیل محدودیت ربات‌های تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت قابل ارسال نیستند 🔄"
+            )
+            return
+
         await safe_reply_audio(
             message,
-            audio=FSInputFile(res["file_path"]),
+            audio=FSInputFile(file_path),
             title=res.get("title", "Spotify Track"),
             performer=res.get("artist") or "Spotify",
             duration=res.get("duration") or 0,
@@ -712,6 +730,7 @@ async def process_spotify_url(message: types.Message, url: str):
         if message.from_user:
             await log_download(message.from_user.id, "spotify")
         await status_msg.delete()
+
     except Exception as e:
         logger.error(f"Spotify download error: {e}", exc_info=True)
         await status_msg.edit_text(get_text("err_general", lang))
