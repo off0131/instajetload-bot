@@ -82,23 +82,24 @@ def ensure_cookies_file() -> Optional[str]:
     if os.path.exists(COOKIES_FILE) and os.path.getsize(COOKIES_FILE) > 0:
         return COOKIES_FILE
 
-    env_cookies = os.environ.get("INSTAGRAM_COOKIES")
+    env_cookies = os.environ.get("SESSION_COOKIES") or os.environ.get("YOUTUBE_COOKIES") or os.environ.get("INSTAGRAM_COOKIES")
     if env_cookies and env_cookies.strip():
         try:
             content = env_cookies.strip()
             try:
                 import base64
                 decoded = base64.b64decode(content).decode("utf-8")
-                if "instagram.com" in decoded or "Netscape" in decoded:
+                if "instagram.com" in decoded or "youtube.com" in decoded or "Netscape" in decoded:
                     content = decoded
             except Exception:
                 pass
             with open(COOKIES_FILE, "w", encoding="utf-8") as f:
                 f.write(content)
-            print("Successfully populated cookies.txt from INSTAGRAM_COOKIES env var.")
+            print("Successfully populated cookies.txt from environment cookies.")
             return COOKIES_FILE
         except Exception as e:
             print(f"Error populating cookies.txt from env: {e}")
+
 
     return None
 
@@ -551,10 +552,14 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
         "extract_flat": False,
         "nocheckcertificate": True,
         "socket_timeout": 20,
-        "extractor_args": YT_EXTRACTOR_ARGS,
     }
+    cookie_path = ensure_cookies_file()
+    if cookie_path:
+        ydl_opts["cookiefile"] = cookie_path
     if ff_dir:
         ydl_opts["ffmpeg_location"] = ff_dir
+
+
 
     video_id = extract_youtube_id(url)
     clean_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
@@ -623,6 +628,7 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
     url = f"https://www.youtube.com/watch?v={video_id}"
     outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
 
+    cookie_path = ensure_cookies_file()
     if quality == "audio":
         ydl_opts = {
             "format": "ba/b",
@@ -640,6 +646,8 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
             "socket_timeout": 35,
             "extractor_args": YT_EXTRACTOR_ARGS,
         }
+        if cookie_path:
+            ydl_opts["cookiefile"] = cookie_path
         if ff_dir:
             ydl_opts["ffmpeg_location"] = ff_dir
         media_type = "audio"
@@ -664,9 +672,12 @@ def download_youtube_sync(video_id: str, quality: str) -> Dict[str, Any]:
             "socket_timeout": 35,
             "extractor_args": YT_EXTRACTOR_ARGS,
         }
+        if cookie_path:
+            ydl_opts["cookiefile"] = cookie_path
         if ff_dir:
             ydl_opts["ffmpeg_location"] = ff_dir
         media_type = "video"
+
 
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
