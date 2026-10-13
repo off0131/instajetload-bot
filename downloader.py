@@ -559,34 +559,57 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
     video_id = extract_youtube_id(url)
     clean_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(clean_url, download=False)
-        vid = info.get("id") or video_id or ""
-        title = info.get("title") or "YouTube Video"
-        duration = info.get("duration") or 0
-        thumbnail = info.get("thumbnail") or ""
-        channel = info.get("uploader") or info.get("channel") or ""
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(clean_url, download=False)
+            vid = info.get("id") or video_id or ""
+            title = info.get("title") or "YouTube Video"
+            duration = info.get("duration") or 0
+            thumbnail = info.get("thumbnail") or ""
+            channel = info.get("uploader") or info.get("channel") or ""
 
-        heights = set()
-        for f in info.get("formats", []):
-            h = f.get("height")
-            if h and f.get("vcodec") != "none":
-                heights.add(h)
+            heights = set()
+            for f in info.get("formats", []):
+                h = f.get("height")
+                if h and f.get("vcodec") != "none":
+                    heights.add(h)
 
-        common_resolutions = [1080, 720, 480, 360]
-        available_res = [h for h in common_resolutions if any(vh >= h for vh in heights)]
-        if not available_res:
-            available_res = [720, 480, 360]
+            common_resolutions = [1080, 720, 480, 360]
+            available_res = [h for h in common_resolutions if any(vh >= h for vh in heights)]
+            if not available_res:
+                available_res = [720, 480, 360]
 
-        return {
-            "id": vid,
-            "title": title,
-            "duration": duration,
-            "thumbnail": thumbnail,
-            "channel": channel,
-            "resolutions": available_res,
-            "url": clean_url,
-        }
+            return {
+                "id": vid,
+                "title": title,
+                "duration": duration,
+                "thumbnail": thumbnail,
+                "channel": channel,
+                "resolutions": available_res,
+                "url": clean_url,
+            }
+    except Exception as e_yt:
+        # Fallback to official YouTube oEmbed API (100% unblocked on all cloud/datacenter IPs)
+        print(f"yt-dlp extract note: {e_yt}, falling back to oEmbed...")
+        if video_id:
+            try:
+                oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+                r = requests.get(oembed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+                if r.status_code == 200:
+                    data = r.json()
+                    return {
+                        "id": video_id,
+                        "title": data.get("title") or "YouTube Video",
+                        "duration": 0,
+                        "thumbnail": data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                        "channel": data.get("author_name") or "YouTube",
+                        "resolutions": [720, 480, 360],
+                        "url": clean_url,
+                    }
+            except Exception as e_oembed:
+                print(f"oEmbed fallback error: {e_oembed}")
+        raise e_yt
+
 
 async def get_youtube_info(url: str) -> Dict[str, Any]:
     return await asyncio.to_thread(extract_youtube_info_sync, url)
