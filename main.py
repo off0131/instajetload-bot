@@ -716,15 +716,20 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 except Exception:
                     d_url = None
 
+            q_label = "صوتی (MP3)" if quality in ("audio", "mp3") else f"{quality}p"
+            title = res.get("title", "YouTube Media")
             msg_text = (
-                f"⚠️ <b>حجم فایل بیش از حد مجاز ارسال مستقیم تلگرام است ({file_size_mb:.1f} MB)</b>\n\n"
+                f"⚠️ <b>حجم فایل بیش از سقف ارسال مستقیم در تلگرام است ({file_size_mb:.1f} MB)</b>\n\n"
+                f"🎬 <b>عنوان:</b> {title}\n"
+                f"📊 <b>کیفیت انتخابی:</b> {q_label}\n"
+                f"💾 <b>حجم دقیق:</b> {file_size_mb:.1f} مگابایت\n\n"
                 "📌 طبق قوانین رسمی تلگرام، ربات‌ها اجازه ارسال فایل‌های بزرگتر از ۵۰ مگابایت را داخل چت ندارند."
             )
             reply_markup = None
             if d_url:
-                msg_text += "\n\n🚀 <b>می‌توانید فایل کامل را مستقیماً با سرعت بالا از طریق لینک زیر دانلود کنید:</b>"
+                msg_text += "\n\n🚀 <b>اما می‌توانید همین فایل کامل را مستقیماً با سرعت بالا از طریق لینک پرسرعت زیر دانلود کنید:</b>"
                 reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=f"📥 دانلود مستقیم فایل ({file_size_mb:.1f} MB)", url=d_url)]
+                    [InlineKeyboardButton(text=f"📥 دانلود مستقیم فایل کامل ({file_size_mb:.1f} MB)", url=d_url)]
                 ])
             else:
                 msg_text += "\n\nلطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید 🔄"
@@ -1015,7 +1020,7 @@ async def health_check_handler(request):
             <p>Telegram Bot: <a href="https://t.me/instajetloadbot" style="color: #38bdf8;">@instajetloadbot</a></p>
             <p>Users: {stats['users']} | Downloads: {stats['downloads']}</p>
             <p style="color: #4ade80;">Status: Healthy & Active</p>
-            <p style="color: #94a3b8; font-size: 13px;">Version: v3.1-unblocked-3tier-cdn | Branch: master</p>
+            <p style="color: #94a3b8; font-size: 13px;">Version: v3.2-direct-cdn-streaming | Branch: master</p>
         </body>
     </html>
     """
