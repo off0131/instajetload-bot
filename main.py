@@ -715,9 +715,15 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
             # Register direct streaming token on our web server
             token = secrets.token_urlsafe(16)
             filename = os.path.basename(file_path)
+            title = res.get("title", "YouTube Media")
+            q_label = "صوتی (MP3)" if quality in ("audio", "mp3") else f"{quality}p"
+
             DIRECT_DOWNLOADS[token] = {
                 "file_path": file_path,
                 "filename": filename,
+                "title": title,
+                "size_mb": file_size_mb,
+                "quality": q_label,
                 "task_dir": task_dir,
                 "created_at": time.time(),
             }
@@ -725,20 +731,25 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
             task_dir = None
 
             server_url = get_server_base_url()
-            download_url = f"{server_url}/dl/{token}"
+            page_url = f"{server_url}/dl/{token}"
+            safe_ext = "mp3" if quality in ("audio", "mp3") else "mp4"
+            stream_url = f"{server_url}/file/{token}/video.{safe_ext}"
 
-            q_label = "صوتی (MP3)" if quality in ("audio", "mp3") else f"{quality}p"
-            title = res.get("title", "YouTube Media")
             msg_text = (
                 f"⚠️ <b>حجم فایل بیش از سقف ارسال مستقیم در تلگرام است ({file_size_mb:.1f} MB)</b>\n\n"
                 f"🎬 <b>عنوان:</b> {title}\n"
                 f"📊 <b>کیفیت انتخابی:</b> {q_label}\n"
                 f"💾 <b>حجم دقیق:</b> {file_size_mb:.1f} مگابایت\n\n"
-                "📌 طبق قوانین رسمی تلگرام، ربات‌ها اجازه ارسال فایل‌های بزرگتر از ۵۰ مگابایت را داخل چت ندارند.\n\n"
-                "🚀 <b>فایل کامل و باکیفیت آماده است؛ برای دانلود با نهایت سرعت روی دکمه زیر بزنید:</b>"
+                "📌 طبق قوانین رسمی تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت امکان ارسال مستقیم در چت را ندارند.\n\n"
+                "🚀 <b>روش‌های دریافت فایل کامل با نهایت سرعت:</b>\n"
+                "۱️⃣ <b>کلیک روی دکمه‌های زیر</b> جهت ورود به صفحه اختصاصی دانلود و تماشای آنلاین\n"
+                "۲️⃣ <b>یا لمس و کپی کردن لینک زیر</b> (با یک‌بار لمس متن زیر کپی می‌شود) و قرار دادن آن در مرورگر Chrome یا برنامه‌های دانلود منیجر (مانند ADM یا IDM):\n\n"
+                f"🔗 <b>لینک مستقیم دانلود:</b>\n"
+                f"<code>{stream_url}</code>"
             )
             reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=f"📥 دانلود مستقیم فایل کامل ({file_size_mb:.1f} MB)", url=download_url)]
+                [InlineKeyboardButton(text=f"🌐 ورود به صفحه دانلود و تماشا ({file_size_mb:.1f} MB)", url=page_url)],
+                [InlineKeyboardButton(text="📥 دانلود مستقیم فایل (مخصوص مرورگر/ADM)", url=stream_url)]
             ])
 
             await status_msg.edit_text(msg_text, reply_markup=reply_markup)
@@ -1030,6 +1041,27 @@ def get_server_base_url() -> str:
         return url.rstrip("/")
     return "https://instajetload-bot.onrender.com"
 
+async def direct_file_stream_handler(request: web.Request) -> web.StreamResponse:
+    token = request.match_info.get("token", "")
+    info = DIRECT_DOWNLOADS.get(token)
+    if not info or not os.path.exists(info.get("file_path", "")):
+        return web.Response(text="File not found or expired.", status=404)
+
+    file_path = info["file_path"]
+    filename = info.get("filename") or os.path.basename(file_path)
+    is_audio = filename.lower().endswith(".mp3")
+    ascii_name = "audio.mp3" if is_audio else "video.mp4"
+    quoted_utf8 = urllib.parse.quote(filename)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quoted_utf8}',
+        "Content-Type": "audio/mpeg" if is_audio else "video/mp4",
+        "Accept-Ranges": "bytes",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "public, max-age=7200",
+    }
+    return web.FileResponse(file_path, chunk_size=256 * 1024, headers=headers)
+
 async def direct_download_handler(request: web.Request) -> web.StreamResponse:
     token = request.match_info.get("token", "")
     info = DIRECT_DOWNLOADS.get(token)
@@ -1042,9 +1074,9 @@ async def direct_download_handler(request: web.Request) -> web.StreamResponse:
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>لینک منقضی شده | InstaJetLoad</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: white; text-align: center; padding: 60px 20px; }
-        .box { max-width: 480px; margin: 0 auto; background: #1e293b; padding: 35px 25px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
-        h2 { color: #f87171; margin-bottom: 15px; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: white; text-align: center; padding: 60px 20px; }
+        .box { max-width: 480px; margin: 0 auto; background: #151e32; padding: 35px 25px; border-radius: 16px; border: 1px solid #24324f; }
+        h2 { color: #f87171; margin-bottom: 15px; font-size: 20px; }
         p { color: #94a3b8; font-size: 15px; line-height: 1.7; }
         a.btn { display: inline-block; background: #38bdf8; color: #0f172a; font-weight: bold; text-decoration: none; padding: 12px 28px; border-radius: 10px; margin-top: 20px; }
     </style>
@@ -1062,17 +1094,226 @@ async def direct_download_handler(request: web.Request) -> web.StreamResponse:
             charset="utf-8"
         )
 
-    file_path = info["file_path"]
-    filename = info.get("filename") or os.path.basename(file_path)
-    quoted_name = urllib.parse.quote(filename)
+    # If requested by a download tool or explicit ?dl=1, stream the file directly
+    ua = request.headers.get("User-Agent", "").lower()
+    if request.query.get("dl") == "1" or any(x in ua for x in ["curl", "wget", "aria2", "adm", "idm", "downloader", "python-requests"]):
+        return await direct_file_stream_handler(request)
 
-    headers = {
-        "Content-Disposition": f'attachment; filename="{quoted_name}"; filename*=UTF-8\'\'{quoted_name}',
-        "Content-Type": "video/mp4",
-        "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "public, max-age=7200",
-    }
-    return web.FileResponse(file_path, chunk_size=256 * 1024, headers=headers)
+    server_url = get_server_base_url()
+    title = html.escape(info.get("title", "دانلود ویدیو یوتیوب"))
+    size_mb = info.get("size_mb", 0.0)
+    quality = html.escape(str(info.get("quality", "Full HD")))
+    filename = info.get("filename") or "video.mp4"
+    is_audio = filename.lower().endswith(".mp3")
+    safe_ext = "mp3" if is_audio else "mp4"
+    safe_name = f"media.{safe_ext}"
+    stream_url = f"{server_url}/file/{token}/video.{safe_ext}"
+
+    html_page = f"""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{title} | دانلود مستقیم</title>
+    <style>
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Vazirmatn", Tahoma, sans-serif;
+            background: #0b0f19;
+            color: #f1f5f9;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 16px;
+        }}
+        .container {{
+            width: 100%;
+            max-width: 520px;
+            background: #151e32;
+            border: 1px solid #24324f;
+            border-radius: 20px;
+            padding: 24px 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            text-align: center;
+        }}
+        .badge-header {{
+            display: inline-block;
+            background: #0284c7;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            padding: 4px 14px;
+            border-radius: 999px;
+            margin-bottom: 16px;
+        }}
+        .title {{
+            font-size: 17px;
+            font-weight: 700;
+            line-height: 1.5;
+            color: #f8fafc;
+            margin-bottom: 14px;
+            word-break: break-word;
+        }}
+        .meta-row {{
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }}
+        .meta-tag {{
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 13px;
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+        }}
+        .meta-tag b {{ color: #38bdf8; }}
+        video {{
+            width: 100%;
+            max-height: 240px;
+            border-radius: 14px;
+            background: #000;
+            margin-bottom: 20px;
+            border: 1px solid #334155;
+        }}
+        .btn-download {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: bold;
+            text-decoration: none;
+            padding: 15px 20px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35);
+            transition: transform 0.15s ease;
+        }}
+        .btn-download:active {{
+            transform: scale(0.98);
+        }}
+        .btn-copy {{
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            background: #1e293b;
+            color: #38bdf8;
+            border: 1px solid #38bdf8;
+            font-size: 14px;
+            font-weight: 600;
+            padding: 12px 18px;
+            border-radius: 12px;
+            cursor: pointer;
+            margin-bottom: 16px;
+        }}
+        .link-box {{
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 10px;
+            font-size: 12px;
+            color: #94a3b8;
+            word-break: break-all;
+            direction: ltr;
+            text-align: left;
+            margin-bottom: 16px;
+            user-select: all;
+        }}
+        .instructions {{
+            background: rgba(56, 189, 248, 0.08);
+            border: 1px dashed #0284c7;
+            border-radius: 10px;
+            padding: 12px;
+            font-size: 13px;
+            line-height: 1.7;
+            color: #cbd5e1;
+            text-align: right;
+        }}
+        .toast {{
+            visibility: hidden;
+            background-color: #10b981;
+            color: #fff;
+            text-align: center;
+            border-radius: 8px;
+            padding: 10px 16px;
+            position: fixed;
+            z-index: 99;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 14px;
+            font-weight: 600;
+        }}
+        .toast.show {{
+            visibility: visible;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <span class="badge-header">⚡️ سرور پرسرعت دانلود مستقیم</span>
+        <h1 class="title">{title}</h1>
+
+        <div class="meta-row">
+            <span class="meta-tag">حجم فایل: <b>{size_mb:.1f} MB</b></span>
+            <span class="meta-tag">کیفیت: <b>{quality}</b></span>
+            <span class="meta-tag">قالب: <b>{"MP3" if is_audio else "MP4"}</b></span>
+        </div>
+
+        {"<audio controls src='" + stream_url + "' style='width:100%;margin-bottom:20px;'></audio>" if is_audio else "<video controls preload='metadata' playsinline src='" + stream_url + "'></video>"}
+
+        <a id="directDownloadBtn" href="{stream_url}" download="{safe_name}" class="btn-download">
+            📥 شروع مستقیم دانلود فایل ({size_mb:.1f} MB)
+        </a>
+
+        <button onclick="copyDirectLink()" class="btn-copy">
+            📋 کپی لینک مستقیم (مخصوص ADM یا دانلود منیجر)
+        </button>
+
+        <div class="link-box" id="linkText">{stream_url}</div>
+
+        <div class="instructions">
+            💡 <b>راهنما:</b> اگر دانلود با زدن دکمه سبز شروع نشد، می‌توانید دکمه «کپی لینک مستقیم» را بزنید و آن را در برنامه <b>ADM</b>، <b>1DM</b> یا مرورگر <b>Chrome</b> جای‌گذاری کنید تا با بالاترین سرعت دانلود شود.
+        </div>
+    </div>
+
+    <div id="toast" class="toast">لینک مستقیم با موفقیت کپی شد! ✅</div>
+
+    <script>
+        function copyDirectLink() {{
+            const url = document.getElementById("linkText").innerText.trim();
+            if (navigator.clipboard) {{
+                navigator.clipboard.writeText(url).then(showToast).catch(() => fallbackCopy(url));
+            }} else {{
+                fallbackCopy(url);
+            }}
+        }}
+        function fallbackCopy(text) {{
+            const temp = document.createElement("input");
+            temp.value = text;
+            document.body.appendChild(temp);
+            temp.select();
+            document.execCommand("copy");
+            document.body.removeChild(temp);
+            showToast();
+        }}
+        function showToast() {{
+            const t = document.getElementById("toast");
+            t.className = "toast show";
+            setTimeout(() => {{ t.className = "toast"; }}, 3000);
+        }}
+    </script>
+</body>
+</html>"""
+    return web.Response(text=html_page, content_type="text/html", charset="utf-8")
 
 async def cleanup_expired_direct_downloads():
     """Background task to remove direct download files older than 2 hours or when cap reached."""
@@ -1113,7 +1354,7 @@ async def health_check_handler(request):
             <p>Telegram Bot: <a href="https://t.me/instajetloadbot" style="color: #38bdf8;">@instajetloadbot</a></p>
             <p>Users: {stats['users']} | Downloads: {stats['downloads']}</p>
             <p style="color: #4ade80;">Status: Healthy & Active</p>
-            <p style="color: #94a3b8; font-size: 13px;">Version: v3.3-self-hosted-fast-dl | Branch: master</p>
+            <p style="color: #94a3b8; font-size: 13px;">Version: v3.4-landing-page-and-direct-stream | Branch: master</p>
         </body>
     </html>
     """
@@ -1132,6 +1373,10 @@ async def start_web_server():
     app.router.add_get("/health", health_check_handler)
     app.router.add_get("/debug", debug_logs_handler)
     app.router.add_get("/dl/{token}", direct_download_handler)
+    app.router.add_get("/file/{token}/{filename}", direct_file_stream_handler)
+    app.router.add_get("/file/{token}", direct_file_stream_handler)
+    app.router.add_get("/stream/{token}/{filename}", direct_file_stream_handler)
+    app.router.add_get("/stream/{token}", direct_file_stream_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 7860))
