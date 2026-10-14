@@ -388,8 +388,27 @@ def plain_caption(caption: str, max_length: int = 850) -> str:
 
 truncate_caption = format_caption
 
+def sanitize_media_kwargs(kwargs: dict) -> dict:
+    cleaned = dict(kwargs)
+    for int_key in ("duration", "width", "height"):
+        if int_key in cleaned:
+            val = cleaned[int_key]
+            if val is not None:
+                try:
+                    num = int(round(float(val)))
+                    if num > 0:
+                        cleaned[int_key] = num
+                    else:
+                        cleaned.pop(int_key, None)
+                except Exception:
+                    cleaned.pop(int_key, None)
+            else:
+                cleaned.pop(int_key, None)
+    return cleaned
+
 async def safe_reply_video(message_or_cb, video, caption: str, **kwargs):
     """Replies with video, safely falling back to plain caption or no caption if entity parsing fails."""
+    kwargs = sanitize_media_kwargs(kwargs)
     try:
         return await message_or_cb.reply_video(video=video, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
     except Exception as e:
@@ -402,6 +421,7 @@ async def safe_reply_video(message_or_cb, video, caption: str, **kwargs):
 
 async def safe_reply_audio(message_or_cb, audio, caption: str, **kwargs):
     """Replies with audio, safely falling back to plain caption if entity parsing fails."""
+    kwargs = sanitize_media_kwargs(kwargs)
     try:
         return await message_or_cb.reply_audio(audio=audio, caption=caption, parse_mode=ParseMode.HTML, **kwargs)
     except Exception as e:
@@ -865,7 +885,7 @@ async def process_spotify_url(message: types.Message, url: str):
                             "file_id": sent.audio.file_id,
                             "title": t_res.get("title"),
                             "artist": t_res.get("artist"),
-                            "duration": t_res.get("duration", 0)
+                            "duration": int(round(float(t_res.get("duration", 0) or 0))) if t_res.get("duration") else 0
                         }], f"🎵 {t_res.get('title', '')}")
             except Exception as te:
                 logger.error(f"Error downloading album track {track.get('title')}: {te}")
@@ -931,7 +951,7 @@ async def process_spotify_url(message: types.Message, url: str):
                 "file_id": sent.audio.file_id,
                 "title": res.get("title", "Spotify Track"),
                 "artist": res.get("artist") or "Spotify",
-                "duration": res.get("duration") or 0
+                "duration": int(round(float(res.get("duration") or 0))) if res.get("duration") else 0
             }], caption)
 
         if message.from_user:
@@ -1354,7 +1374,7 @@ async def health_check_handler(request):
             <p>Telegram Bot: <a href="https://t.me/instajetloadbot" style="color: #38bdf8;">@instajetloadbot</a></p>
             <p>Users: {stats['users']} | Downloads: {stats['downloads']}</p>
             <p style="color: #4ade80;">Status: Healthy & Active</p>
-            <p style="color: #94a3b8; font-size: 13px;">Version: v3.4-landing-page-and-direct-stream | Branch: master</p>
+            <p style="color: #94a3b8; font-size: 13px;">Version: v3.5-spotify-pydantic-validation-fixed | Branch: master</p>
         </body>
     </html>
     """

@@ -26,7 +26,7 @@ os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 def setup_ffmpeg():
     """Ensure ffmpeg is available in PATH or symlinked."""
-    if shutil.which("ffmpeg"):
+    if shutil.which("ffmpeg") and shutil.which("ffprobe"):
         return
     try:
         import imageio_ffmpeg
@@ -34,9 +34,15 @@ def setup_ffmpeg():
         if ffmpeg_exe and os.path.exists(ffmpeg_exe):
             ffmpeg_dir = os.path.dirname(ffmpeg_exe)
             ffmpeg_link = os.path.join(ffmpeg_dir, "ffmpeg")
+            ffprobe_link = os.path.join(ffmpeg_dir, "ffprobe")
             if not os.path.exists(ffmpeg_link):
                 try:
                     os.symlink(ffmpeg_exe, ffmpeg_link)
+                except Exception:
+                    pass
+            if not os.path.exists(ffprobe_link):
+                try:
+                    os.symlink(ffmpeg_exe, ffprobe_link)
                 except Exception:
                     pass
             current_path = os.environ.get("PATH", "")
@@ -1483,7 +1489,7 @@ def download_spotify_sync(url_or_track_dict: Union[str, Dict[str, Any]], task_di
             "title": track_title,
             "artist": artist,
             "album": album,
-            "duration": dur or spotify_dur,
+            "duration": int(round(float(dur or spotify_dur or 0))) if (dur or spotify_dur) else 0,
             "cover_path": cover_path if (cover_bytes and cover_path and os.path.exists(cover_path)) else None,
             "bitrate": "320k",
         }
