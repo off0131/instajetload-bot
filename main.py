@@ -4,7 +4,10 @@ import os
 import re
 import html
 import shutil
-from typing import List
+import secrets
+import time
+import urllib.parse
+from typing import List, Dict, Any, Optional
 
 import aiohttp
 from dotenv import load_dotenv
@@ -709,12 +712,20 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
 
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
         if file_size_mb > 49.5:
-            d_url = res.get("download_url")
-            if not d_url:
-                try:
-                    d_url = await asyncio.to_thread(get_youtube_direct_cdn_url, video_id, quality)
-                except Exception:
-                    d_url = None
+            # Register direct streaming token on our web server
+            token = secrets.token_urlsafe(16)
+            filename = os.path.basename(file_path)
+            DIRECT_DOWNLOADS[token] = {
+                "file_path": file_path,
+                "filename": filename,
+                "task_dir": task_dir,
+                "created_at": time.time(),
+            }
+            # Prevent the finally block from deleting task_dir while the user downloads
+            task_dir = None
+
+            server_url = get_server_base_url()
+            download_url = f"{server_url}/dl/{token}"
 
             q_label = "صوتی (MP3)" if quality in ("audio", "mp3") else f"{quality}p"
             title = res.get("title", "YouTube Media")
@@ -723,16 +734,12 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 f"🎬 <b>عنوان:</b> {title}\n"
                 f"📊 <b>کیفیت انتخابی:</b> {q_label}\n"
                 f"💾 <b>حجم دقیق:</b> {file_size_mb:.1f} مگابایت\n\n"
-                "📌 طبق قوانین رسمی تلگرام، ربات‌ها اجازه ارسال فایل‌های بزرگتر از ۵۰ مگابایت را داخل چت ندارند."
+                "📌 طبق قوانین رسمی تلگرام، ربات‌ها اجازه ارسال فایل‌های بزرگتر از ۵۰ مگابایت را داخل چت ندارند.\n\n"
+                "🚀 <b>فایل کامل و باکیفیت آماده است؛ برای دانلود با نهایت سرعت روی دکمه زیر بزنید:</b>"
             )
-            reply_markup = None
-            if d_url:
-                msg_text += "\n\n🚀 <b>اما می‌توانید همین فایل کامل را مستقیماً با سرعت بالا از طریق لینک پرسرعت زیر دانلود کنید:</b>"
-                reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text=f"📥 دانلود مستقیم فایل کامل ({file_size_mb:.1f} MB)", url=d_url)]
-                ])
-            else:
-                msg_text += "\n\nلطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید 🔄"
+            reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=f"📥 دانلود مستقیم فایل کامل ({file_size_mb:.1f} MB)", url=download_url)]
+            ])
 
             await status_msg.edit_text(msg_text, reply_markup=reply_markup)
             return
@@ -1015,6 +1022,87 @@ async def handle_other_messages(message: types.Message):
 
 from aiohttp import web
 
+DIRECT_DOWNLOADS: Dict[str, Dict[str, Any]] = {}
+
+def get_server_base_url() -> str:
+    url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("SELF_PING_URL")
+    if url and url.startswith("http"):
+        return url.rstrip("/")
+    return "https://instajetload-bot.onrender.com"
+
+async def direct_download_handler(request: web.Request) -> web.StreamResponse:
+    token = request.match_info.get("token", "")
+    info = DIRECT_DOWNLOADS.get(token)
+    if not info or not os.path.exists(info.get("file_path", "")):
+        return web.Response(
+            text="""<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>لینک منقضی شده | InstaJetLoad</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: white; text-align: center; padding: 60px 20px; }
+        .box { max-width: 480px; margin: 0 auto; background: #1e293b; padding: 35px 25px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
+        h2 { color: #f87171; margin-bottom: 15px; }
+        p { color: #94a3b8; font-size: 15px; line-height: 1.7; }
+        a.btn { display: inline-block; background: #38bdf8; color: #0f172a; font-weight: bold; text-decoration: none; padding: 12px 28px; border-radius: 10px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h2>⚠️ لینک دانلود مستقیم منقضی شده است</h2>
+        <p>به منظور مدیریت بهینه فضای ذخیره‌سازی سرور، لینک‌های فایل‌های حجیم پس از ۲ ساعت منقضی می‌شوند. لطفاً مجدداً لینک مورد نظر را در ربات تلگرام ارسال فرمایید.</p>
+        <a class="btn" href="https://t.me/instajetloadbot">بازگشت به ربات تلگرام 🚀</a>
+    </div>
+</body>
+</html>""",
+            content_type="text/html",
+            status=404,
+            charset="utf-8"
+        )
+
+    file_path = info["file_path"]
+    filename = info.get("filename") or os.path.basename(file_path)
+    quoted_name = urllib.parse.quote(filename)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{quoted_name}"; filename*=UTF-8\'\'{quoted_name}',
+        "Content-Type": "video/mp4",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "public, max-age=7200",
+    }
+    return web.FileResponse(file_path, chunk_size=256 * 1024, headers=headers)
+
+async def cleanup_expired_direct_downloads():
+    """Background task to remove direct download files older than 2 hours or when cap reached."""
+    while True:
+        await asyncio.sleep(600)  # Check every 10 minutes
+        try:
+            now = time.time()
+            to_remove = []
+            for token, info in list(DIRECT_DOWNLOADS.items()):
+                if now - info.get("created_at", 0) > 7200:  # 2 hours
+                    to_remove.append(token)
+
+            # Cap max concurrent active stored large files to 5 to protect container disk
+            if len(DIRECT_DOWNLOADS) - len(to_remove) > 5:
+                sorted_items = sorted(
+                    [(k, v) for k, v in DIRECT_DOWNLOADS.items() if k not in to_remove],
+                    key=lambda x: x[1].get("created_at", 0)
+                )
+                for k, v in sorted_items[:-5]:
+                    to_remove.append(k)
+
+            for token in to_remove:
+                info = DIRECT_DOWNLOADS.pop(token, None)
+                if info:
+                    td = info.get("task_dir")
+                    if td:
+                        cleanup_task_dir(td)
+        except Exception as e:
+            logger.debug(f"Direct download cleanup error: {e}")
+
 async def health_check_handler(request):
     stats = await get_stats()
     html_content = f"""
@@ -1025,7 +1113,7 @@ async def health_check_handler(request):
             <p>Telegram Bot: <a href="https://t.me/instajetloadbot" style="color: #38bdf8;">@instajetloadbot</a></p>
             <p>Users: {stats['users']} | Downloads: {stats['downloads']}</p>
             <p style="color: #4ade80;">Status: Healthy & Active</p>
-            <p style="color: #94a3b8; font-size: 13px;">Version: v3.2-direct-cdn-streaming | Branch: master</p>
+            <p style="color: #94a3b8; font-size: 13px;">Version: v3.3-self-hosted-fast-dl | Branch: master</p>
         </body>
     </html>
     """
@@ -1043,6 +1131,7 @@ async def start_web_server():
     app.router.add_get("/", health_check_handler)
     app.router.add_get("/health", health_check_handler)
     app.router.add_get("/debug", debug_logs_handler)
+    app.router.add_get("/dl/{token}", direct_download_handler)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 7860))
@@ -1134,6 +1223,7 @@ async def main():
     await start_web_server()
     await set_bot_commands()
     asyncio.create_task(self_keep_alive())
+    asyncio.create_task(cleanup_expired_direct_downloads())
     logger.info("Bot is starting polling...")
     # Skip any accumulated old updates
     await bot.delete_webhook(drop_pending_updates=True)
