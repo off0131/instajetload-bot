@@ -68,8 +68,9 @@ class TestTier2F1YouTubeVideoBoundaries(unittest.TestCase):
         self.assertEqual(res["type"], "video")
         downloader.cleanup_task_dir(res["task_dir"])
 
+    @patch("downloader.download_youtube_via_helper_sync", return_value=None)
     @patch("downloader.yt_dlp.YoutubeDL")
-    def test_f1_bnd_02_no_files_downloaded_raises_value_error(self, mock_ydl):
+    def test_f1_bnd_02_no_files_downloaded_raises_value_error(self, mock_ydl, mock_helper):
         mock_instance = MagicMock()
         mock_instance.extract_info.return_value = {"title": "Test", "duration": 100}
         mock_ydl.return_value.__enter__.return_value = mock_instance
@@ -158,8 +159,9 @@ class TestTier2F2YouTubeAudioBoundaries(unittest.TestCase):
         self.assertIsNone(dur)
         os.remove(tf_path)
 
+    @patch("downloader.download_youtube_via_helper_sync", return_value=None)
     @patch("downloader.yt_dlp.YoutubeDL")
-    def test_f2_bnd_04_audio_download_fail_raises_value_error(self, mock_ydl):
+    def test_f2_bnd_04_audio_download_fail_raises_value_error(self, mock_ydl, mock_helper):
         mock_inst = MagicMock()
         mock_inst.extract_info.side_effect = Exception("Audio extraction aborted")
         mock_ydl.return_value.__enter__.return_value = mock_inst
@@ -380,7 +382,8 @@ class TestTier2F7MultiTierCascadeBoundaries(unittest.TestCase):
             downloader.cleanup_task_dir(res["task_dir"])
 
     def test_f7_bnd_03_dl_both_strategies_fail(self):
-        with patch("downloader.yt_dlp.YoutubeDL", side_effect=Exception("All fail")):
+        with patch("downloader.download_youtube_via_helper_sync", return_value=None), \
+             patch("downloader.yt_dlp.YoutubeDL", side_effect=Exception("All fail")):
             with self.assertRaises(ValueError) as ctx:
                 downloader.download_youtube_sync("dQw4w9WgXcQ", "720")
             self.assertIn("دانلود فایل از یوتیوب ناموفق بود", str(ctx.exception))

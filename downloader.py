@@ -711,9 +711,9 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
             if not progress_url:
                 return None
 
-            # Poll progress endpoint (up to 20 seconds)
+            # Poll progress endpoint (up to 40 seconds)
             download_url = None
-            for _ in range(10):
+            for _ in range(20):
                 await asyncio.sleep(2)
                 try:
                     async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=8)) as p_resp:
@@ -804,7 +804,7 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
             return None
 
         download_url = None
-        for _ in range(10):
+        for _ in range(20):
             time.sleep(2)
             try:
                 p_resp = requests.get(progress_url, headers=headers, timeout=8)
@@ -953,7 +953,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
             try:
                 if is_audio:
                     ydl_opts_2 = {
-                        "format": "18/best/ba",
+                        "format": "ba/b/18/best",
                         "outtmpl": outtmpl,
                         "postprocessors": [{
                             "key": "FFmpegExtractAudio",
@@ -970,7 +970,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     }
                 else:
                     ydl_opts_2 = {
-                        "format": f"b[height<={q_int}]/18/best",
+                        "format": f"bv*[height<={q_int}]+ba/b[height<={q_int}]/18/best",
                         "outtmpl": outtmpl,
                         "merge_output_format": "mp4",
                         "retries": 5,
@@ -995,6 +995,21 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     tier_used = 2
             except Exception as e2:
                 print(f"[YouTube DL] Strategy 2 (android) error: {e2}")
+
+        files = [
+            f for f in glob.glob(os.path.join(task_dir, "*"))
+            if os.path.isfile(f) and not f.endswith(".part") and not f.endswith(".ytdl")
+        ]
+        if not files:
+            # Tier 3 Fallback: Unblocked external Loader.to / SaveNow REST helper
+            print(f"[YouTube DL] Local strategies 1 & 2 failed or blocked on datacenter IP. Calling Tier 3 (External Helper)...")
+            try:
+                helper_res = download_youtube_via_helper_sync(video_id, quality, task_dir=task_dir)
+                if helper_res and helper_res.get("file_path") and os.path.exists(helper_res["file_path"]):
+                    success = True
+                    return helper_res
+            except Exception as e3:
+                print(f"[YouTube DL] Tier 3 helper error: {e3}")
 
         files = [
             f for f in glob.glob(os.path.join(task_dir, "*"))

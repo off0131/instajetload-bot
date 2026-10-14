@@ -137,7 +137,8 @@ class TestTier3CrossFeatureCombinations(unittest.IsolatedAsyncioTestCase):
                 created_task_dirs.append(td)
             raise RuntimeError("Network interrupted mid-stream")
 
-        with patch("downloader.yt_dlp.YoutubeDL", side_effect=factory_with_failure):
+        with patch("downloader.download_youtube_via_helper_sync", return_value=None), \
+             patch("downloader.yt_dlp.YoutubeDL", side_effect=factory_with_failure):
             task_dir_to_clean = None
             try:
                 downloader.download_youtube_sync("dQw4w9WgXcQ", "720")
