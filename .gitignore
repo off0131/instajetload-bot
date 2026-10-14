@@ -6,3 +6,6 @@ downloads/
 .env
 cookies.txt
 cookies*.txt
+*.db
+*.zip
+gallery-dl/
