@@ -755,14 +755,19 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                     "duration": res.get("duration") or 0
                 }], formatted_caption)
         else:
+            v_kwargs = {"supports_streaming": True}
+            if res.get("width") and res.get("width") > 0:
+                v_kwargs["width"] = res.get("width")
+            if res.get("height") and res.get("height") > 0:
+                v_kwargs["height"] = res.get("height")
+            if res.get("duration") and res.get("duration") > 0:
+                v_kwargs["duration"] = int(res.get("duration"))
+
             sent = await safe_reply_video(
                 callback.message,
                 video=FSInputFile(file_path),
                 caption=formatted_caption,
-                width=res.get("width"),
-                height=res.get("height"),
-                duration=res.get("duration"),
-                supports_streaming=True
+                **v_kwargs
             )
             if sent and sent.video:
                 await save_cache(cache_key, "video", [{

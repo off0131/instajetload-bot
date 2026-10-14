@@ -955,19 +955,18 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                 }
             else:
                 fmt_1 = (
+                    f"bv*[height<={q_int}][vcodec^=avc]+ba[acodec^=mp4a]/"
+                    f"bv*[height<={q_int}][vcodec^=avc]+ba/"
                     f"bv*[height<={q_int}][ext=mp4]+ba[ext=m4a]/"
-                    f"bv*[height<={q_int}]+ba/"
+                    f"b[height<={q_int}][vcodec^=avc]/"
                     f"b[height<={q_int}][ext=mp4]/"
-                    f"b[height<={q_int}]/"
-                    f"bestvideo[height<={q_int}]+bestaudio/"
-                    f"best[height<={q_int}]/"
                     f"18/best"
                 )
                 ydl_opts_1 = {
                     "format": fmt_1,
                     "outtmpl": outtmpl,
                     "merge_output_format": "mp4",
-                    "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac"]},
+                    "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart"]},
                     "retries": 5,
                     "fragment_retries": 5,
                     "quiet": True,
@@ -1015,10 +1014,19 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                         "extractor_args": {"youtube": {"player_client": ["android"]}},
                     }
                 else:
+                    fmt_2 = (
+                        f"bv*[height<={q_int}][vcodec^=avc]+ba[acodec^=mp4a]/"
+                        f"bv*[height<={q_int}][vcodec^=avc]+ba/"
+                        f"bv*[height<={q_int}][ext=mp4]+ba[ext=m4a]/"
+                        f"b[height<={q_int}][vcodec^=avc]/"
+                        f"b[height<={q_int}][ext=mp4]/"
+                        f"18/best"
+                    )
                     ydl_opts_2 = {
-                        "format": f"bv*[height<={q_int}]+ba/b[height<={q_int}]/18/best",
+                        "format": fmt_2,
                         "outtmpl": outtmpl,
                         "merge_output_format": "mp4",
+                        "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart"]},
                         "retries": 5,
                         "fragment_retries": 5,
                         "quiet": True,

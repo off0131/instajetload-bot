@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-10-14T10:07:06Z",
+  "timestamp": "2026-10-14T10:26:30Z",
   "summary": {
     "total_run": 161,
     "total_passed": 161,
     "total_failed": 0,
-    "total_duration": 4.526133060455322,
+    "total_duration": 4.423641204833984,
     "all_passed": true
   },
   "tiers": [
@@ -15,7 +15,7 @@
       "run": 72,
       "passed": 72,
       "failed": 0,
-      "duration": 2.386277914047241,
+      "duration": 2.2322540283203125,
       "success": true
     },
     {
@@ -25,7 +25,7 @@
       "run": 70,
       "passed": 70,
       "failed": 0,
-      "duration": 1.61968994140625,
+      "duration": 1.9664790630340576,
       "success": true
     },
     {
@@ -35,7 +35,7 @@
       "run": 14,
       "passed": 14,
       "failed": 0,
-      "duration": 0.11844301223754883,
+      "duration": 0.060630083084106445,
       "success": true
     },
     {
@@ -45,7 +45,7 @@
       "run": 5,
       "passed": 5,
       "failed": 0,
-      "duration": 0.4017221927642822,
+      "duration": 0.1642780303955078,
       "success": true
     }
   ],
@@ -53,13 +53,13 @@
     {
       "name": "tests.test_tier1_features.TestTier1F10SpotifyAlbum.test_f10_01_detect_spotify_album_url",
       "status": "PASSED",
-      "duration": 5.316734313964844e-05,
+      "duration": 5.507469177246094e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F10SpotifyAlbum.test_f10_02_album_url_pattern_distinction",
       "status": "PASSED",
-      "duration": 1.4781951904296875e-05,
+      "duration": 1.5020370483398438e-05,
       "error": null
     },
     {
@@ -71,457 +71,457 @@
     {
       "name": "tests.test_tier1_features.TestTier1F10SpotifyAlbum.test_f10_04_sequential_album_processing_simulation",
       "status": "PASSED",
-      "duration": 1.430511474609375e-05,
+      "duration": 2.7179718017578125e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F10SpotifyAlbum.test_f10_05_album_track_error_isolation",
       "status": "PASSED",
-      "duration": 2.09808349609375e-05,
+      "duration": 1.71661376953125e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F11Telegram50MBGuard.test_f11_01_file_size_under_limit_allowed",
       "status": "PASSED",
-      "duration": 0.0009593963623046875,
+      "duration": 0.0009448528289794922,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F11Telegram50MBGuard.test_f11_02_file_size_over_limit_blocked",
       "status": "PASSED",
-      "duration": 0.0002079010009765625,
+      "duration": 0.00019311904907226562,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F11Telegram50MBGuard.test_f11_03_file_size_boundary_check_49_4mb",
       "status": "PASSED",
-      "duration": 1.5974044799804688e-05,
+      "duration": 1.0013580322265625e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F11Telegram50MBGuard.test_f11_04_file_size_guard_triggers_task_dir_cleanup",
       "status": "PASSED",
-      "duration": 0.0003581047058105469,
+      "duration": 0.0003490447998046875,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F11Telegram50MBGuard.test_f11_05_file_size_missing_file_handled",
       "status": "PASSED",
-      "duration": 2.3126602172851562e-05,
+      "duration": 0.0002357959747314453,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F12ScratchCleanup.test_f12_01_cleanup_existing_task_dir",
       "status": "PASSED",
-      "duration": 0.00032019615173339844,
+      "duration": 0.0003209114074707031,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F12ScratchCleanup.test_f12_02_cleanup_nonexistent_dir_safe",
       "status": "PASSED",
-      "duration": 1.5974044799804688e-05,
+      "duration": 1.71661376953125e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F12ScratchCleanup.test_f12_03_cleanup_none_safe",
       "status": "PASSED",
-      "duration": 9.059906005859375e-06,
+      "duration": 1.0967254638671875e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F12ScratchCleanup.test_f12_04_cleanup_empty_string_safe",
       "status": "PASSED",
-      "duration": 6.9141387939453125e-06,
+      "duration": 8.821487426757812e-06,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F12ScratchCleanup.test_f12_05_downloads_base_dir_retained",
       "status": "PASSED",
-      "duration": 0.0006227493286132812,
+      "duration": 0.0002281665802001953,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F13TelegramCache.test_f13_01_init_db_creates_tables",
       "status": "PASSED",
-      "duration": 0.01373600959777832,
+      "duration": 0.013026237487792969,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F13TelegramCache.test_f13_02_save_and_get_cached",
       "status": "PASSED",
-      "duration": 0.006582975387573242,
+      "duration": 0.006453037261962891,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F13TelegramCache.test_f13_03_get_cached_missing_returns_none",
       "status": "PASSED",
-      "duration": 0.005815267562866211,
+      "duration": 0.004909038543701172,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F13TelegramCache.test_f13_04_clear_cache_db",
       "status": "PASSED",
-      "duration": 0.011144876480102539,
+      "duration": 0.01076197624206543,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F13TelegramCache.test_f13_05_cache_stats_count",
       "status": "PASSED",
-      "duration": 0.007701873779296875,
+      "duration": 0.007695198059082031,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F13TelegramCache.test_f13_06_log_download_increments_stats",
       "status": "PASSED",
-      "duration": 0.0077440738677978516,
+      "duration": 0.007662296295166016,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F14RenderWebServer.test_f14_01_health_check_handler_200",
       "status": "PASSED",
-      "duration": 2.1727359294891357,
+      "duration": 2.062156915664673,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F14RenderWebServer.test_f14_02_health_path_status_ok",
       "status": "PASSED",
-      "duration": 0.011358022689819336,
+      "duration": 0.007220029830932617,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F14RenderWebServer.test_f14_03_debug_logs_unauthorized",
       "status": "PASSED",
-      "duration": 0.00152587890625,
+      "duration": 0.0009431838989257812,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F14RenderWebServer.test_f14_04_debug_logs_authorized",
       "status": "PASSED",
-      "duration": 0.0022437572479248047,
+      "duration": 0.0011489391326904297,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F14RenderWebServer.test_f14_05_self_keepalive_no_env_noop",
       "status": "PASSED",
-      "duration": 0.0012469291687011719,
+      "duration": 0.0009100437164306641,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F1YouTubeVideo.test_f1_01_download_1080p_mp4",
       "status": "PASSED",
-      "duration": 0.0015532970428466797,
+      "duration": 0.0013949871063232422,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F1YouTubeVideo.test_f1_02_download_720p_mp4",
       "status": "PASSED",
-      "duration": 0.0009908676147460938,
+      "duration": 0.0007669925689697266,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F1YouTubeVideo.test_f1_03_download_480p_mp4",
       "status": "PASSED",
-      "duration": 0.0010328292846679688,
+      "duration": 0.00067138671875,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F1YouTubeVideo.test_f1_04_download_360p_mp4",
       "status": "PASSED",
-      "duration": 0.0008459091186523438,
+      "duration": 0.0007622241973876953,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F1YouTubeVideo.test_f1_05_download_async_wrapper",
       "status": "PASSED",
-      "duration": 0.0015599727630615234,
+      "duration": 0.0014200210571289062,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F2YouTubeAudio.test_f2_01_audio_extraction_quality_audio",
       "status": "PASSED",
-      "duration": 0.0010890960693359375,
+      "duration": 0.0007698535919189453,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F2YouTubeAudio.test_f2_02_audio_extraction_stream_verification",
       "status": "PASSED",
-      "duration": 0.0007090568542480469,
+      "duration": 0.0007159709930419922,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F2YouTubeAudio.test_f2_03_audio_metadata_mapping",
       "status": "PASSED",
-      "duration": 0.0023369789123535156,
+      "duration": 0.0016291141510009766,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F2YouTubeAudio.test_f2_04_audio_task_dir_isolation",
       "status": "PASSED",
-      "duration": 0.0008668899536132812,
+      "duration": 0.0007250308990478516,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F2YouTubeAudio.test_f2_05_audio_postprocessor_options",
       "status": "PASSED",
-      "duration": 0.0011970996856689453,
+      "duration": 0.0011148452758789062,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F3YouTubeShorts.test_f3_01_extract_id_from_shorts_url",
       "status": "PASSED",
-      "duration": 0.0003807544708251953,
+      "duration": 0.0003199577331542969,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F3YouTubeShorts.test_f3_02_extract_id_from_shorts_share_url",
       "status": "PASSED",
-      "duration": 1.8358230590820312e-05,
+      "duration": 1.6927719116210938e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F3YouTubeShorts.test_f3_03_detect_platform_shorts",
       "status": "PASSED",
-      "duration": 1.1920928955078125e-05,
+      "duration": 1.1205673217773438e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F3YouTubeShorts.test_f3_04_download_shorts_as_video",
       "status": "PASSED",
-      "duration": 0.0011849403381347656,
+      "duration": 0.0006878376007080078,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F3YouTubeShorts.test_f3_05_download_shorts_as_audio",
       "status": "PASSED",
-      "duration": 0.0009500980377197266,
+      "duration": 0.0007069110870361328,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F4YouTubeMetadata.test_f4_01_extract_info_normal_url",
       "status": "PASSED",
-      "duration": 0.0005581378936767578,
+      "duration": 0.0004391670227050781,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F4YouTubeMetadata.test_f4_02_extract_info_channel_uploader",
       "status": "PASSED",
-      "duration": 0.0002899169921875,
+      "duration": 0.00021600723266601562,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F4YouTubeMetadata.test_f4_03_extract_info_clean_url",
       "status": "PASSED",
-      "duration": 0.000247955322265625,
+      "duration": 0.00019598007202148438,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F4YouTubeMetadata.test_f4_04_get_youtube_info_async",
       "status": "PASSED",
-      "duration": 0.0011050701141357422,
+      "duration": 0.000820159912109375,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F4YouTubeMetadata.test_f4_05_extract_resolutions_filtering",
       "status": "PASSED",
-      "duration": 0.0009298324584960938,
+      "duration": 0.000698089599609375,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F4YouTubeMetadata.test_f4_06_extract_youtube_id_various_formats",
       "status": "PASSED",
-      "duration": 3.695487976074219e-05,
+      "duration": 3.0040740966796875e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F5DatacenterAntiBot.test_f5_01_extractor_args_android_configured",
       "status": "PASSED",
-      "duration": 1.7881393432617188e-05,
+      "duration": 1.4066696166992188e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F5DatacenterAntiBot.test_f5_02_get_youtube_cookies_file_valid",
       "status": "PASSED",
-      "duration": 0.00038886070251464844,
+      "duration": 0.00032210350036621094,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F5DatacenterAntiBot.test_f5_03_get_youtube_cookies_file_missing",
       "status": "PASSED",
-      "duration": 4.100799560546875e-05,
+      "duration": 3.62396240234375e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F5DatacenterAntiBot.test_f5_04_ensure_cookies_file_from_env_var",
       "status": "PASSED",
-      "duration": 0.001859903335571289,
+      "duration": 0.0013988018035888672,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F5DatacenterAntiBot.test_f5_05_ensure_cookies_file_base64_decode",
       "status": "PASSED",
-      "duration": 0.0018303394317626953,
+      "duration": 0.001216888427734375,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F6ExternalHelperFallback.test_f6_01_oembed_fallback_on_bot_block",
       "status": "PASSED",
-      "duration": 0.0008461475372314453,
+      "duration": 0.0005779266357421875,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F6ExternalHelperFallback.test_f6_02_oembed_fallback_metadata_mapping",
       "status": "PASSED",
-      "duration": 0.0006849765777587891,
+      "duration": 0.0006320476531982422,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F6ExternalHelperFallback.test_f6_03_oembed_fallback_default_resolutions",
       "status": "PASSED",
-      "duration": 0.0008790493011474609,
+      "duration": 0.0005910396575927734,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F6ExternalHelperFallback.test_f6_04_rapidapi_keys_rotation",
       "status": "PASSED",
-      "duration": 0.0004799365997314453,
+      "duration": 0.0003180503845214844,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F6ExternalHelperFallback.test_f6_05_rapidapi_download_helper",
       "status": "PASSED",
-      "duration": 0.0006859302520751953,
+      "duration": 0.00047898292541503906,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F7MultiTierCascade.test_f7_01_info_cascade_node_to_android",
       "status": "PASSED",
-      "duration": 0.0009562969207763672,
+      "duration": 0.0006783008575439453,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F7MultiTierCascade.test_f7_02_info_cascade_android_to_oembed",
       "status": "PASSED",
-      "duration": 0.0007259845733642578,
+      "duration": 0.0005140304565429688,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F7MultiTierCascade.test_f7_03_dl_cascade_strategy1_to_strategy2",
       "status": "PASSED",
-      "duration": 0.0010919570922851562,
+      "duration": 0.0009720325469970703,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F7MultiTierCascade.test_f7_04_spotify_cascade_sc_to_yt",
       "status": "PASSED",
-      "duration": 0.0031120777130126953,
+      "duration": 0.0028951168060302734,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F7MultiTierCascade.test_f7_05_spotify_cascade_yt_queries_progression",
       "status": "PASSED",
-      "duration": 0.08201193809509277,
+      "duration": 0.06162381172180176,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F8SpotifyMetadata.test_f8_01_detect_spotify_platform_track",
       "status": "PASSED",
-      "duration": 0.00010013580322265625,
+      "duration": 2.193450927734375e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F8SpotifyMetadata.test_f8_02_detect_spotify_platform_short_link",
       "status": "PASSED",
-      "duration": 2.8848648071289062e-05,
+      "duration": 1.0967254638671875e-05,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F8SpotifyMetadata.test_f8_03_parse_og_title_standard",
       "status": "PASSED",
-      "duration": 0.0037250518798828125,
+      "duration": 0.002341747283935547,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F8SpotifyMetadata.test_f8_04_parse_og_title_single_by",
       "status": "PASSED",
-      "duration": 0.003039836883544922,
+      "duration": 0.0016658306121826172,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F8SpotifyMetadata.test_f8_05_parse_og_desc_artist",
       "status": "PASSED",
-      "duration": 0.0040509700775146484,
+      "duration": 0.0015311241149902344,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F9SpotifyAudio.test_f9_01_spotify_download_sync_returns_dict",
       "status": "PASSED",
-      "duration": 0.0019309520721435547,
+      "duration": 0.0016412734985351562,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F9SpotifyAudio.test_f9_02_spotify_download_async_wrapper",
       "status": "PASSED",
-      "duration": 0.0024580955505371094,
+      "duration": 0.002354860305786133,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F9SpotifyAudio.test_f9_03_spotify_scsearch_options",
       "status": "PASSED",
-      "duration": 0.0017077922821044922,
+      "duration": 0.0014879703521728516,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F9SpotifyAudio.test_f9_04_spotify_ffmpeg_manual_convert",
       "status": "PASSED",
-      "duration": 0.0022649765014648438,
+      "duration": 0.0020558834075927734,
       "error": null
     },
     {
       "name": "tests.test_tier1_features.TestTier1F9SpotifyAudio.test_f9_05_spotify_track_output_extension",
       "status": "PASSED",
-      "duration": 0.001497030258178711,
+      "duration": 0.0014257431030273438,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F10SpotifyAlbumBoundaries.test_f10_bnd_01_empty_album_tracklist",
       "status": "PASSED",
-      "duration": 3.0994415283203125e-05,
+      "duration": 2.9802322387695312e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F10SpotifyAlbumBoundaries.test_f10_bnd_02_single_track_album",
       "status": "PASSED",
-      "duration": 1.0728836059570312e-05,
+      "duration": 1.0967254638671875e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F10SpotifyAlbumBoundaries.test_f10_bnd_03_album_duplicate_track_names",
       "status": "PASSED",
-      "duration": 1.0967254638671875e-05,
+      "duration": 1.2159347534179688e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F10SpotifyAlbumBoundaries.test_f10_bnd_04_album_url_with_query_params",
       "status": "PASSED",
-      "duration": 1.1920928955078125e-05,
+      "duration": 1.0967254638671875e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F10SpotifyAlbumBoundaries.test_f10_bnd_05_album_track_null_duration",
       "status": "PASSED",
-      "duration": 8.106231689453125e-06,
+      "duration": 7.867813110351562e-06,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F11Telegram50MBGuardBoundaries.test_f11_bnd_01_49_49_mb_passes",
       "status": "PASSED",
-      "duration": 9.775161743164062e-06,
+      "duration": 1.0013580322265625e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F11Telegram50MBGuardBoundaries.test_f11_bnd_02_49_51_mb_fails",
       "status": "PASSED",
-      "duration": 6.9141387939453125e-06,
+      "duration": 8.106231689453125e-06,
       "error": null
     },
     {
@@ -545,475 +545,475 @@
     {
       "name": "tests.test_tier2_boundaries.TestTier2F12ScratchCleanupBoundaries.test_f12_bnd_01_cleanup_locked_files_ignore_errors",
       "status": "PASSED",
-      "duration": 3.886222839355469e-05,
+      "duration": 3.981590270996094e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F12ScratchCleanupBoundaries.test_f12_bnd_02_cleanup_empty_string",
       "status": "PASSED",
-      "duration": 6.9141387939453125e-06,
+      "duration": 1.1205673217773438e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F12ScratchCleanupBoundaries.test_f12_bnd_03_cleanup_none",
       "status": "PASSED",
-      "duration": 6.9141387939453125e-06,
+      "duration": 7.152557373046875e-06,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F12ScratchCleanupBoundaries.test_f12_bnd_04_cleanup_deep_nested_structure",
       "status": "PASSED",
-      "duration": 0.0006768703460693359,
+      "duration": 0.0007410049438476562,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F12ScratchCleanupBoundaries.test_f12_bnd_05_cleanup_read_only_files",
       "status": "PASSED",
-      "duration": 0.00028777122497558594,
+      "duration": 0.0003058910369873047,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F13TelegramCacheBoundaries.test_f13_bnd_01_duplicate_save_cache_replaces",
       "status": "PASSED",
-      "duration": 0.013829946517944336,
+      "duration": 0.009814977645874023,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F13TelegramCacheBoundaries.test_f13_bnd_02_empty_file_ids_list",
       "status": "PASSED",
-      "duration": 0.009240865707397461,
+      "duration": 0.006501197814941406,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F13TelegramCacheBoundaries.test_f13_bnd_03_huge_caption",
       "status": "PASSED",
-      "duration": 0.006869077682495117,
+      "duration": 0.006707191467285156,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F13TelegramCacheBoundaries.test_f13_bnd_04_special_characters_shortcode",
       "status": "PASSED",
-      "duration": 0.011246681213378906,
+      "duration": 0.006417751312255859,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F13TelegramCacheBoundaries.test_f13_bnd_05_clear_cache_empty_table",
       "status": "PASSED",
-      "duration": 0.00793600082397461,
+      "duration": 0.005023956298828125,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F14RenderWebServerBoundaries.test_f14_bnd_01_invalid_debug_token_401",
       "status": "PASSED",
-      "duration": 0.0008828639984130859,
+      "duration": 0.0007741451263427734,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F14RenderWebServerBoundaries.test_f14_bnd_02_empty_debug_token_401",
       "status": "PASSED",
-      "duration": 0.0007822513580322266,
+      "duration": 0.0007078647613525391,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F14RenderWebServerBoundaries.test_f14_bnd_03_debug_logs_ring_buffer_cap",
       "status": "PASSED",
-      "duration": 0.00046706199645996094,
+      "duration": 0.00042891502380371094,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F14RenderWebServerBoundaries.test_f14_bnd_04_health_page_contains_metrics",
       "status": "PASSED",
-      "duration": 0.011137962341308594,
+      "duration": 0.008714437484741211,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F14RenderWebServerBoundaries.test_f14_bnd_05_custom_port_environment",
       "status": "PASSED",
-      "duration": 0.0010991096496582031,
+      "duration": 0.0007050037384033203,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F1YouTubeVideoBoundaries.test_f1_bnd_01_non_numeric_quality_defaults_720",
       "status": "PASSED",
-      "duration": 0.0016660690307617188,
+      "duration": 0.0009300708770751953,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F1YouTubeVideoBoundaries.test_f1_bnd_02_no_files_downloaded_raises_value_error",
       "status": "PASSED",
-      "duration": 0.0019729137420654297,
+      "duration": 0.0010449886322021484,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F1YouTubeVideoBoundaries.test_f1_bnd_03_part_and_ytdl_files_ignored",
       "status": "PASSED",
-      "duration": 1.4823250770568848,
+      "duration": 1.864081859588623,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F1YouTubeVideoBoundaries.test_f1_bnd_04_title_with_unicode_and_emojis",
       "status": "PASSED",
-      "duration": 0.0010602474212646484,
+      "duration": 0.0030117034912109375,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F1YouTubeVideoBoundaries.test_f1_bnd_05_title_with_quotes_and_special_chars",
       "status": "PASSED",
-      "duration": 0.0007100105285644531,
+      "duration": 0.001725912094116211,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F2YouTubeAudioBoundaries.test_f2_bnd_01_zero_duration_audio",
       "status": "PASSED",
-      "duration": 0.0006871223449707031,
+      "duration": 0.0013687610626220703,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F2YouTubeAudioBoundaries.test_f2_bnd_02_empty_uploader_defaults_channel",
       "status": "PASSED",
-      "duration": 0.0012369155883789062,
+      "duration": 0.00232696533203125,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F2YouTubeAudioBoundaries.test_f2_bnd_03_corrupted_zero_byte_audio_dimensions",
       "status": "PASSED",
-      "duration": 0.00021505355834960938,
+      "duration": 0.0003960132598876953,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F2YouTubeAudioBoundaries.test_f2_bnd_04_audio_download_fail_raises_value_error",
       "status": "PASSED",
-      "duration": 0.0013039112091064453,
+      "duration": 0.0018727779388427734,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F2YouTubeAudioBoundaries.test_f2_bnd_05_audio_extreme_duration",
       "status": "PASSED",
-      "duration": 0.001383066177368164,
+      "duration": 0.0013430118560791016,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F3YouTubeShortsBoundaries.test_f3_bnd_01_shorts_url_trailing_slash",
       "status": "PASSED",
-      "duration": 0.0001220703125,
+      "duration": 4.792213439941406e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F3YouTubeShortsBoundaries.test_f3_bnd_02_shorts_mixed_case",
       "status": "PASSED",
-      "duration": 1.8835067749023438e-05,
+      "duration": 2.5033950805664062e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F3YouTubeShortsBoundaries.test_f3_bnd_03_shorts_invalid_short_id",
       "status": "PASSED",
-      "duration": 0.000492095947265625,
+      "duration": 0.000675201416015625,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F3YouTubeShortsBoundaries.test_f3_bnd_04_shorts_with_timestamp_param",
       "status": "PASSED",
-      "duration": 2.7894973754882812e-05,
+      "duration": 2.4080276489257812e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F3YouTubeShortsBoundaries.test_f3_bnd_05_shorts_detect_platform_subdomain",
       "status": "PASSED",
-      "duration": 1.3113021850585938e-05,
+      "duration": 1.621246337890625e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F4YouTubeMetadataBoundaries.test_f4_bnd_01_invalid_url_raises_value_error",
       "status": "PASSED",
-      "duration": 0.0008559226989746094,
+      "duration": 0.0005590915679931641,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F4YouTubeMetadataBoundaries.test_f4_bnd_02_empty_title_defaults_to_youtube_video",
       "status": "PASSED",
-      "duration": 0.001961946487426758,
+      "duration": 0.001277923583984375,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F4YouTubeMetadataBoundaries.test_f4_bnd_03_empty_thumbnail_defaults_to_hqdefault",
       "status": "PASSED",
-      "duration": 0.0018780231475830078,
+      "duration": 0.0010747909545898438,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F4YouTubeMetadataBoundaries.test_f4_bnd_04_empty_formats_defaults_resolutions",
       "status": "PASSED",
-      "duration": 0.0019290447235107422,
+      "duration": 0.0011298656463623047,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F4YouTubeMetadataBoundaries.test_f4_bnd_05_extract_youtube_id_embed_format",
       "status": "PASSED",
-      "duration": 0.0001418590545654297,
+      "duration": 2.6941299438476562e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F5DatacenterAntiBotBoundaries.test_f5_bnd_01_empty_cookies_file_ignored",
       "status": "PASSED",
-      "duration": 0.0004949569702148438,
+      "duration": 0.00035309791564941406,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F5DatacenterAntiBotBoundaries.test_f5_bnd_02_cookies_file_size_under_50_ignored",
       "status": "PASSED",
-      "duration": 0.0005249977111816406,
+      "duration": 0.0003581047058105469,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F5DatacenterAntiBotBoundaries.test_f5_bnd_03_cookies_file_without_yt_tokens_ignored",
       "status": "PASSED",
-      "duration": 0.0011830329895019531,
+      "duration": 0.0007069110870361328,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F5DatacenterAntiBotBoundaries.test_f5_bnd_04_corrupted_base64_env_cookies",
       "status": "PASSED",
-      "duration": 0.0019061565399169922,
+      "duration": 0.0008940696716308594,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F5DatacenterAntiBotBoundaries.test_f5_bnd_05_proxy_forwarded_to_ydl_opts",
       "status": "PASSED",
-      "duration": 0.0028839111328125,
+      "duration": 0.0013818740844726562,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F6ExternalHelperBoundaries.test_f6_bnd_01_oembed_http_500_failure",
       "status": "PASSED",
-      "duration": 0.002268075942993164,
+      "duration": 0.0018837451934814453,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F6ExternalHelperBoundaries.test_f6_bnd_02_oembed_timeout",
       "status": "PASSED",
-      "duration": 0.0006258487701416016,
+      "duration": 0.0005369186401367188,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F6ExternalHelperBoundaries.test_f6_bnd_03_oembed_json_empty_dict",
       "status": "PASSED",
-      "duration": 0.0006709098815917969,
+      "duration": 0.0009658336639404297,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F6ExternalHelperBoundaries.test_f6_bnd_04_rapidapi_empty_keys",
       "status": "PASSED",
-      "duration": 0.0003349781036376953,
+      "duration": 0.0003871917724609375,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F6ExternalHelperBoundaries.test_f6_bnd_05_rapidapi_single_key_no_index_error",
       "status": "PASSED",
-      "duration": 0.0004410743713378906,
+      "duration": 0.0002880096435546875,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F7MultiTierCascadeBoundaries.test_f7_bnd_01_all_info_strategies_fail_clean_error",
       "status": "PASSED",
-      "duration": 0.0007398128509521484,
+      "duration": 0.0007791519165039062,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F7MultiTierCascadeBoundaries.test_f7_bnd_02_dl_strategy1_exception_does_not_abort",
       "status": "PASSED",
-      "duration": 0.0012149810791015625,
+      "duration": 0.0012469291687011719,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F7MultiTierCascadeBoundaries.test_f7_bnd_03_dl_both_strategies_fail",
       "status": "PASSED",
-      "duration": 0.0010042190551757812,
+      "duration": 0.0007479190826416016,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F7MultiTierCascadeBoundaries.test_f7_bnd_04_spotify_soundcloud_error_cascades_to_yt",
       "status": "PASSED",
-      "duration": 0.002199888229370117,
+      "duration": 0.00203704833984375,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F7MultiTierCascadeBoundaries.test_f7_bnd_05_spotify_all_searches_fail",
       "status": "PASSED",
-      "duration": 0.001646280288696289,
+      "duration": 0.0015060901641845703,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F8SpotifyMetadataBoundaries.test_f8_bnd_01_malformed_spotify_url_not_matched",
       "status": "PASSED",
-      "duration": 2.09808349609375e-05,
+      "duration": 2.5033950805664062e-05,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F8SpotifyMetadataBoundaries.test_f8_bnd_02_html_entities_unescaped",
       "status": "PASSED",
-      "duration": 0.0016930103302001953,
+      "duration": 0.0016782283782958984,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F8SpotifyMetadataBoundaries.test_f8_bnd_03_spotify_pipe_suffix_removed",
       "status": "PASSED",
-      "duration": 0.0019199848175048828,
+      "duration": 0.0017230510711669922,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F8SpotifyMetadataBoundaries.test_f8_bnd_04_spotify_song_and_lyrics_by",
       "status": "PASSED",
-      "duration": 0.003097057342529297,
+      "duration": 0.0016551017761230469,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F8SpotifyMetadataBoundaries.test_f8_bnd_05_spotify_dot_separated_desc",
       "status": "PASSED",
-      "duration": 0.004178047180175781,
+      "duration": 0.001425027847290039,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F9SpotifyAudioBoundaries.test_f9_bnd_01_empty_artist_query_fallback",
       "status": "PASSED",
-      "duration": 0.004480123519897461,
+      "duration": 0.0018579959869384766,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F9SpotifyAudioBoundaries.test_f9_bnd_02_special_characters_in_song_name",
       "status": "PASSED",
-      "duration": 0.0038797855377197266,
+      "duration": 0.0014519691467285156,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F9SpotifyAudioBoundaries.test_f9_bnd_03_ffmpeg_manual_convert_fallback",
       "status": "PASSED",
-      "duration": 0.005878925323486328,
+      "duration": 0.0037708282470703125,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F9SpotifyAudioBoundaries.test_f9_bnd_04_ffmpeg_subproc_failure",
       "status": "PASSED",
-      "duration": 0.002752065658569336,
+      "duration": 0.0019698143005371094,
       "error": null
     },
     {
       "name": "tests.test_tier2_boundaries.TestTier2F9SpotifyAudioBoundaries.test_f9_bnd_05_duration_none_defaults_to_zero",
       "status": "PASSED",
-      "duration": 0.0024068355560302734,
+      "duration": 0.0019152164459228516,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_01_f1_f13_yt_video_download_and_cache",
       "status": "PASSED",
-      "duration": 0.022027015686035156,
+      "duration": 0.010361909866333008,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_02_f2_f13_yt_audio_download_and_cache",
       "status": "PASSED",
-      "duration": 0.008848190307617188,
+      "duration": 0.008165121078491211,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_03_f1_f11_oversized_yt_video_triggers_guard",
       "status": "PASSED",
-      "duration": 0.008337020874023438,
+      "duration": 0.006302833557128906,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_04_f1_f12_yt_download_exception_cleans_scratch",
       "status": "PASSED",
-      "duration": 0.0029439926147460938,
+      "duration": 0.0012907981872558594,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_05_f4_f5_metadata_resolution_under_datacenter_block",
       "status": "PASSED",
-      "duration": 0.003571033477783203,
+      "duration": 0.0015406608581542969,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_06_f5_f6_datacenter_block_to_oembed_fallback",
       "status": "PASSED",
-      "duration": 0.003113985061645508,
+      "duration": 0.0010731220245361328,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_07_f7_f2_audio_failover_strategy1_to_strategy2",
       "status": "PASSED",
-      "duration": 0.004097700119018555,
+      "duration": 0.002074003219604492,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_08_f8_f9_spotify_metadata_to_audio_pipeline",
       "status": "PASSED",
-      "duration": 0.0029838085174560547,
+      "duration": 0.002112150192260742,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_09_f8_f7_spotify_soundcloud_fails_to_youtube",
       "status": "PASSED",
-      "duration": 0.003789663314819336,
+      "duration": 0.00244903564453125,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_10_f9_f12_spotify_audio_scratch_cleanup_on_success_and_error",
       "status": "PASSED",
-      "duration": 0.005075931549072266,
+      "duration": 0.0018792152404785156,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_11_f10_f12_spotify_album_loop_cleans_each_track_scratch",
       "status": "PASSED",
-      "duration": 0.003283262252807617,
+      "duration": 0.0013797283172607422,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_12_f13_f14_cache_hit_updates_web_server_metrics",
       "status": "PASSED",
-      "duration": 0.02718520164489746,
+      "duration": 0.013370037078857422,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_13_f3_f1_shorts_vertical_video_dimensions",
       "status": "PASSED",
-      "duration": 0.00505375862121582,
+      "duration": 0.0013842582702636719,
       "error": null
     },
     {
       "name": "tests.test_tier3_combinations.TestTier3CrossFeatureCombinations.test_t3_14_f11_f12_oversized_spotify_audio_cleans_scratch",
       "status": "PASSED",
-      "duration": 0.0036399364471435547,
+      "duration": 0.0008447170257568359,
       "error": null
     },
     {
       "name": "tests.test_tier4_workloads.TestTier4RealWorldWorkloads.test_t4_01_full_spotify_album_download_workflow",
       "status": "PASSED",
-      "duration": 0.17028403282165527,
+      "duration": 0.018632173538208008,
       "error": null
     },
     {
       "name": "tests.test_tier4_workloads.TestTier4RealWorldWorkloads.test_t4_02_high_res_youtube_video_download_and_cache_hit",
       "status": "PASSED",
-      "duration": 0.0312650203704834,
+      "duration": 0.015024900436401367,
       "error": null
     },
     {
       "name": "tests.test_tier4_workloads.TestTier4RealWorldWorkloads.test_t4_03_simulated_datacenter_429_bot_block_triggering_fallback",
       "status": "PASSED",
-      "duration": 0.004614830017089844,
+      "duration": 0.002318143844604492,
       "error": null
     },
     {
       "name": "tests.test_tier4_workloads.TestTier4RealWorldWorkloads.test_t4_04_oversized_video_handling_and_adaptive_warning",
       "status": "PASSED",
-      "duration": 0.007346153259277344,
+      "duration": 0.005896091461181641,
       "error": null
     },
     {
       "name": "tests.test_tier4_workloads.TestTier4RealWorldWorkloads.test_t4_05_concurrent_mixed_downloads_under_semaphore",
       "status": "PASSED",
-      "duration": 0.17687606811523438,
+      "duration": 0.1202249526977539,
       "error": null
     }
   ]
