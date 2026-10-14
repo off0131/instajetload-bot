@@ -47,6 +47,7 @@ from downloader import (
     download_spotify_album,
     get_spotify_info,
     download_generic,
+    get_youtube_direct_cdn_url,
 )
 
 # Load environment variables
@@ -708,10 +709,27 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
 
         file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
         if file_size_mb > 49.5:
-            await status_msg.edit_text(
-                f"⚠️ <b>حجم فایل بیش از حد مجاز تلگرام است ({file_size_mb:.1f} MB):</b>\n\n"
-                "به دلیل محدودیت ربات‌های تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت قابل ارسال مستقیم نیستند. لطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید 🔄"
+            d_url = res.get("download_url")
+            if not d_url:
+                try:
+                    d_url = await asyncio.to_thread(get_youtube_direct_cdn_url, video_id, quality)
+                except Exception:
+                    d_url = None
+
+            msg_text = (
+                f"⚠️ <b>حجم فایل بیش از حد مجاز ارسال مستقیم تلگرام است ({file_size_mb:.1f} MB)</b>\n\n"
+                "📌 طبق قوانین رسمی تلگرام، ربات‌ها اجازه ارسال فایل‌های بزرگتر از ۵۰ مگابایت را داخل چت ندارند."
             )
+            reply_markup = None
+            if d_url:
+                msg_text += "\n\n🚀 <b>می‌توانید فایل کامل را مستقیماً با سرعت بالا از طریق لینک زیر دانلود کنید:</b>"
+                reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=f"📥 دانلود مستقیم فایل ({file_size_mb:.1f} MB)", url=d_url)]
+                ])
+            else:
+                msg_text += "\n\nلطفاً کیفیت پایین‌تر یا نسخه صوتی را انتخاب کنید 🔄"
+
+            await status_msg.edit_text(msg_text, reply_markup=reply_markup)
             return
 
         formatted_caption = format_caption(f"🎵 {res.get('title', '')}" if quality == "audio" else res.get("title", ""))

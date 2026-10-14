@@ -763,6 +763,7 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
                     "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
                     "is_audio": is_audio,
                     "tier_used": 3,
+                    "download_url": download_url,
                 }
             return None
     finally:
@@ -855,11 +856,55 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
                 "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
                 "is_audio": is_audio,
                 "tier_used": 3,
+                "download_url": download_url,
             }
         return None
     finally:
         if not success and created_task_dir and task_dir and os.path.exists(task_dir):
             cleanup_task_dir(task_dir)
+
+def get_youtube_direct_cdn_url(video_id: str, quality: str) -> Optional[str]:
+    """Fetch the high-speed direct CDN streaming URL from Loader.to / SaveNow REST API."""
+    format_map = {
+        "360": "360",
+        "480": "480",
+        "720": "720",
+        "1080": "1080",
+        "audio": "mp3",
+        "mp3": "mp3"
+    }
+    fmt = format_map.get(str(quality), "720")
+    start_url = (
+        f"https://loader.to/ajax/download.php?button=1&start=1&end=1"
+        f"&format={fmt}&url=https%3A%2F%2Fwww.youtube.com%2Fwatch%3Fv%3D{video_id}"
+    )
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Referer": "https://en.loader.to/"
+    }
+    try:
+        resp = requests.get(start_url, headers=headers, timeout=12)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        progress_url = data.get("progress_url")
+        if not progress_url:
+            return None
+        for _ in range(15):
+            time.sleep(2)
+            try:
+                p_resp = requests.get(progress_url, headers=headers, timeout=8)
+                if p_resp.status_code == 200:
+                    p_data = p_resp.json()
+                    if p_data.get("download_url"):
+                        return p_data.get("download_url")
+                    elif p_data.get("success") == -1:
+                        return None
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"[CDN Direct URL] Error: {e}")
+    return None
 
 def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] = None) -> Dict[str, Any]:
     ff_dir = get_ffmpeg_dir()
