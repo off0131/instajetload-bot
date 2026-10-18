@@ -868,6 +868,43 @@ class TestTier1F14RenderWebServer(unittest.IsolatedAsyncioTestCase):
             # Should return immediately without loop
             await main.self_keep_alive()
 
+    def test_f14_06_sanitize_media_kwargs_pydantic_float_fix(self):
+        import main
+        # Test float duration from Spotify or audio/video metadata
+        raw_kwargs = {
+            "duration": 246.669,
+            "width": 1920.0,
+            "height": 1080.4,
+            "caption": "test track",
+            "supports_streaming": True
+        }
+        cleaned = main.sanitize_media_kwargs(raw_kwargs)
+        self.assertEqual(cleaned["duration"], 247)
+        self.assertEqual(cleaned["width"], 1920)
+        self.assertEqual(cleaned["height"], 1080)
+        self.assertEqual(cleaned["caption"], "test track")
+        self.assertTrue(cleaned["supports_streaming"])
+
+        # Test negative, zero, or non-numeric values are safely popped
+        bad_kwargs = {"duration": -5, "width": "invalid", "height": 0}
+        cleaned_bad = main.sanitize_media_kwargs(bad_kwargs)
+        self.assertNotIn("duration", cleaned_bad)
+        self.assertNotIn("width", cleaned_bad)
+        self.assertNotIn("height", cleaned_bad)
+
+    async def test_f14_07_keep_chat_action_lifecycle(self):
+        import main
+        mock_bot = AsyncMock()
+        mock_bot.send_chat_action = AsyncMock()
+
+        # Run keep_chat_action with a tiny interval
+        async with main.keep_chat_action(mock_bot, chat_id=123456, action="upload_video", interval=0.05):
+            await asyncio.sleep(0.12)
+
+        # Ensure send_chat_action was called multiple times
+        self.assertGreaterEqual(mock_bot.send_chat_action.call_count, 2)
+        mock_bot.send_chat_action.assert_called_with(123456, "upload_video")
+
 
 if __name__ == "__main__":
     unittest.main()

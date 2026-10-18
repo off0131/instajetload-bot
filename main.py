@@ -8,6 +8,7 @@ import secrets
 import time
 import urllib.parse
 from typing import List, Dict, Any, Optional
+from contextlib import asynccontextmanager
 
 import aiohttp
 from dotenv import load_dotenv
@@ -406,6 +407,32 @@ def sanitize_media_kwargs(kwargs: dict) -> dict:
                 cleaned.pop(int_key, None)
     return cleaned
 
+@asynccontextmanager
+async def keep_chat_action(bot_instance: Bot, chat_id: int, action: str = ChatAction.UPLOAD_VIDEO, interval: float = 4.0):
+    """Continuously refreshes chat action (e.g. 'sending video...') in Telegram status bar until task finishes."""
+    stop_event = asyncio.Event()
+
+    async def _action_loop():
+        while not stop_event.is_set():
+            try:
+                await bot_instance.send_chat_action(chat_id, action)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+
+    task = asyncio.create_task(_action_loop())
+    try:
+        yield
+    finally:
+        stop_event.set()
+        try:
+            await task
+        except Exception:
+            pass
+
 async def safe_reply_video(message_or_cb, video, caption: str, **kwargs):
     """Replies with video, safely falling back to plain caption or no caption if entity parsing fails."""
     kwargs = sanitize_media_kwargs(kwargs)
@@ -451,214 +478,215 @@ async def process_instagram_url(message: types.Message, url: str):
     shortcode = extract_shortcode(url)
 
     status_msg = await message.reply(get_text("downloading_general", lang))
-    await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_VIDEO)
 
-    # 1. Check database cache
-    if shortcode:
-        cached = await get_cached(shortcode)
-        if cached:
-            media_items = cached.get("file_ids", [])
-            has_bad_video = any(
-                i.get("type") == "video" and (not i.get("duration") or i.get("duration") <= 2)
-                for i in media_items
-            )
-            if has_bad_video:
-                logger.info(f"Cached video for {shortcode} is corrupt/short, re-downloading freshly.")
-            else:
-                try:
-                    caption_text = truncate_caption(cached.get("caption", ""))
-
-                    if len(media_items) == 1:
-                        item = media_items[0]
-                        if item["type"] == "video":
-                            await safe_reply_video(
-                                message,
-                                video=item["file_id"],
-                                caption=caption_text,
-                                width=item.get("width"),
-                                height=item.get("height"),
-                                duration=item.get("duration"),
-                                supports_streaming=True
-                            )
-                        else:
-                            await safe_reply_photo(message, photo=item["file_id"], caption=caption_text)
-                    elif len(media_items) > 1:
-                        media_group = []
-                        for idx, itm in enumerate(media_items[:10]):
-                            c = caption_text if idx == 0 else None
-                            if itm["type"] == "video":
-                                media_group.append(InputMediaVideo(
-                                    media=itm["file_id"],
-                                    caption=c,
-                                    width=itm.get("width"),
-                                    height=itm.get("height"),
-                                    duration=itm.get("duration"),
-                                    supports_streaming=True
-                                ))
-                            else:
-                                media_group.append(InputMediaPhoto(media=itm["file_id"], caption=c))
-                        try:
-                            await message.reply_media_group(media=media_group)
-                        except Exception:
-                            # Retry media group without caption if entity parse error
-                            for m in media_group:
-                                m.caption = None
-                            await message.reply_media_group(media=media_group)
-
-                    await log_download(user.id if user else 0, shortcode)
-                    await status_msg.delete()
-                    return
-                except Exception as e:
-                    logger.warning(f"Cache delivery failed, downloading freshly: {e}")
-
-    # 2. Download freshly
-    task_dir = None
-    try:
-        async with DOWNLOAD_SEMAPHORE:
-            result = await download_instagram_media(url)
-        task_dir = result.get("task_dir")
-        sc = result.get("shortcode") or shortcode or "unknown"
-        caption = result.get("caption", "")
-        formatted_caption = truncate_caption(caption)
-        items = result.get("items", [])
-
-        if not items:
-            await status_msg.edit_text("❌ محتوایی برای دانلود در این لینک یافت نشد.")
-            return
-
-        saved_file_ids = []
-
-        if len(items) == 1:
-            item = items[0]
-            file_input = FSInputFile(item["path"])
-            if item["type"] == "video":
-                sent = await safe_reply_video(
-                    message,
-                    video=file_input,
-                    caption=formatted_caption,
-                    width=item.get("width"),
-                    height=item.get("height"),
-                    duration=item.get("duration"),
-                    supports_streaming=True
+    async with keep_chat_action(bot, message.chat.id, ChatAction.UPLOAD_VIDEO):
+        # 1. Check database cache
+        if shortcode:
+            cached = await get_cached(shortcode)
+            if cached:
+                media_items = cached.get("file_ids", [])
+                has_bad_video = any(
+                    i.get("type") == "video" and (not i.get("duration") or i.get("duration") <= 2)
+                    for i in media_items
                 )
-                if sent and sent.video:
-                    saved_file_ids.append({
-                        "type": "video",
-                        "file_id": sent.video.file_id,
-                        "width": item.get("width"),
-                        "height": item.get("height"),
-                        "duration": item.get("duration")
-                    })
-            elif item["type"] == "photo":
-                sent = await safe_reply_photo(message, photo=file_input, caption=formatted_caption)
-                if sent and sent.photo:
-                    saved_file_ids.append({"type": "photo", "file_id": sent.photo[-1].file_id})
-            else:
-                sent = await message.reply_document(document=file_input, caption=plain_caption(formatted_caption))
-                if sent and sent.document:
-                    saved_file_ids.append({"type": "document", "file_id": sent.document.file_id})
-        else:
-            # Multi-slide album / Carousel
-            batches = [items[i:i + 10] for i in range(0, len(items), 10)]
-            for b_idx, batch in enumerate(batches):
-                media_group = []
-                for idx, itm in enumerate(batch):
-                    f_input = FSInputFile(itm["path"])
-                    c = formatted_caption if (b_idx == 0 and idx == 0) else None
-                    if itm["type"] == "video":
-                        media_group.append(InputMediaVideo(
-                            media=f_input,
-                            caption=c,
-                            width=itm.get("width"),
-                            height=itm.get("height"),
-                            duration=itm.get("duration"),
-                            supports_streaming=True
-                        ))
-                    else:
-                        media_group.append(InputMediaPhoto(media=f_input, caption=c))
+                if has_bad_video:
+                    logger.info(f"Cached video for {shortcode} is corrupt/short, re-downloading freshly.")
+                else:
+                    try:
+                        caption_text = truncate_caption(cached.get("caption", ""))
 
-                sent_msgs = await message.reply_media_group(media=media_group)
-                for idx, s_msg in enumerate(sent_msgs):
-                    orig_item = batch[idx] if idx < len(batch) else {}
-                    if s_msg.video:
+                        if len(media_items) == 1:
+                            item = media_items[0]
+                            if item["type"] == "video":
+                                await safe_reply_video(
+                                    message,
+                                    video=item["file_id"],
+                                    caption=caption_text,
+                                    width=item.get("width"),
+                                    height=item.get("height"),
+                                    duration=item.get("duration"),
+                                    supports_streaming=True
+                                )
+                            else:
+                                await safe_reply_photo(message, photo=item["file_id"], caption=caption_text)
+                        elif len(media_items) > 1:
+                            media_group = []
+                            for idx, itm in enumerate(media_items[:10]):
+                                c = caption_text if idx == 0 else None
+                                if itm["type"] == "video":
+                                    media_group.append(InputMediaVideo(
+                                        media=itm["file_id"],
+                                        caption=c,
+                                        width=itm.get("width"),
+                                        height=itm.get("height"),
+                                        duration=int(round(float(itm.get("duration")))) if itm.get("duration") else None,
+                                        supports_streaming=True
+                                    ))
+                                else:
+                                    media_group.append(InputMediaPhoto(media=itm["file_id"], caption=c))
+                            try:
+                                await message.reply_media_group(media=media_group)
+                            except Exception:
+                                # Retry media group without caption if entity parse error
+                                for m in media_group:
+                                    m.caption = None
+                                await message.reply_media_group(media=media_group)
+
+                        await log_download(user.id if user else 0, shortcode)
+                        await status_msg.delete()
+                        return
+                    except Exception as e:
+                        logger.warning(f"Cache delivery failed, downloading freshly: {e}")
+
+        # 2. Download freshly
+        task_dir = None
+        try:
+            async with DOWNLOAD_SEMAPHORE:
+                result = await download_instagram_media(url)
+            task_dir = result.get("task_dir")
+            sc = result.get("shortcode") or shortcode or "unknown"
+            caption = result.get("caption", "")
+            formatted_caption = truncate_caption(caption)
+            items = result.get("items", [])
+
+            if not items:
+                await status_msg.edit_text("❌ محتوایی برای دانلود در این لینک یافت نشد.")
+                return
+
+            saved_file_ids = []
+
+            if len(items) == 1:
+                item = items[0]
+                file_input = FSInputFile(item["path"])
+                if item["type"] == "video":
+                    sent = await safe_reply_video(
+                        message,
+                        video=file_input,
+                        caption=formatted_caption,
+                        width=item.get("width"),
+                        height=item.get("height"),
+                        duration=item.get("duration"),
+                        supports_streaming=True
+                    )
+                    if sent and sent.video:
                         saved_file_ids.append({
                             "type": "video",
-                            "file_id": s_msg.video.file_id,
-                            "width": orig_item.get("width"),
-                            "height": orig_item.get("height"),
-                            "duration": orig_item.get("duration")
+                            "file_id": sent.video.file_id,
+                            "width": item.get("width"),
+                            "height": item.get("height"),
+                            "duration": item.get("duration")
                         })
-                    elif s_msg.photo:
-                        saved_file_ids.append({"type": "photo", "file_id": s_msg.photo[-1].file_id})
+                elif item["type"] == "photo":
+                    sent = await safe_reply_photo(message, photo=file_input, caption=formatted_caption)
+                    if sent and sent.photo:
+                        saved_file_ids.append({"type": "photo", "file_id": sent.photo[-1].file_id})
+                else:
+                    sent = await message.reply_document(document=file_input, caption=plain_caption(formatted_caption))
+                    if sent and sent.document:
+                        saved_file_ids.append({"type": "document", "file_id": sent.document.file_id})
+            else:
+                # Multi-slide album / Carousel
+                batches = [items[i:i + 10] for i in range(0, len(items), 10)]
+                for b_idx, batch in enumerate(batches):
+                    media_group = []
+                    for idx, itm in enumerate(batch):
+                        f_input = FSInputFile(itm["path"])
+                        c = formatted_caption if (b_idx == 0 and idx == 0) else None
+                        if itm["type"] == "video":
+                            media_group.append(InputMediaVideo(
+                                media=f_input,
+                                caption=c,
+                                width=itm.get("width"),
+                                height=itm.get("height"),
+                                duration=int(round(float(itm.get("duration")))) if itm.get("duration") else None,
+                                supports_streaming=True
+                            ))
+                        else:
+                            media_group.append(InputMediaPhoto(media=f_input, caption=c))
 
-        if saved_file_ids and sc:
-            await save_cache(sc, "album" if len(items) > 1 else items[0]["type"], saved_file_ids, caption)
+                    sent_msgs = await message.reply_media_group(media=media_group)
+                    for idx, s_msg in enumerate(sent_msgs):
+                        orig_item = batch[idx] if idx < len(batch) else {}
+                        if s_msg.video:
+                            saved_file_ids.append({
+                                "type": "video",
+                                "file_id": s_msg.video.file_id,
+                                "width": orig_item.get("width"),
+                                "height": orig_item.get("height"),
+                                "duration": orig_item.get("duration")
+                            })
+                        elif s_msg.photo:
+                            saved_file_ids.append({"type": "photo", "file_id": s_msg.photo[-1].file_id})
 
-        if user:
-            await log_download(user.id, sc)
+            if saved_file_ids and sc:
+                await save_cache(sc, "album" if len(items) > 1 else items[0]["type"], saved_file_ids, caption)
 
-        await status_msg.delete()
+            if user:
+                await log_download(user.id, sc)
 
-    except Exception as e:
-        logger.error(f"Download error: {e}", exc_info=True)
-        err_msg = str(e)
-        if "private" in err_msg.lower() or "followers" in err_msg.lower():
-            text = get_text("err_private", lang)
-        else:
-            text = get_text("err_general", lang)
-        await status_msg.edit_text(text)
-    finally:
-        if task_dir:
-            cleanup_task_dir(task_dir)
+            await status_msg.delete()
+
+        except Exception as e:
+            logger.error(f"Download error: {e}", exc_info=True)
+            err_msg = str(e)
+            if "private" in err_msg.lower() or "followers" in err_msg.lower():
+                text = get_text("err_private", lang)
+            else:
+                text = get_text("err_general", lang)
+            await status_msg.edit_text(text)
+        finally:
+            if task_dir:
+                cleanup_task_dir(task_dir)
 
 async def process_youtube_url(message: types.Message, url: str):
     user_id = message.from_user.id if message.from_user else 0
     lang = await get_user_lang(user_id)
     status_msg = await message.reply(get_text("yt_fetching_info", lang))
-    try:
-        info = await get_youtube_info(url)
-        video_id = info["id"]
-        title = info.get("title", "YouTube Video")
-        duration = info.get("duration", 0)
-        dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "0:00"
-        channel = info.get("channel", "YouTube")
-        resolutions = info.get("resolutions") or [720, 480, 360]
+    async with keep_chat_action(bot, message.chat.id, ChatAction.TYPING):
+        try:
+            info = await get_youtube_info(url)
+            video_id = info["id"]
+            title = info.get("title", "YouTube Video")
+            duration = info.get("duration", 0)
+            dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "0:00"
+            channel = info.get("channel", "YouTube")
+            resolutions = info.get("resolutions") or [720, 480, 360]
 
-        # Build inline keyboard for quality selection
-        quality_buttons = []
-        row = []
-        for r in resolutions[:4]:
-            row.append(InlineKeyboardButton(text=f"🎬 {r}p", callback_data=f"yt:{video_id}:{r}"))
-        if row:
-            quality_buttons.append(row)
+            # Build inline keyboard for quality selection
+            quality_buttons = []
+            row = []
+            for r in resolutions[:4]:
+                row.append(InlineKeyboardButton(text=f"🎬 {r}p", callback_data=f"yt:{video_id}:{r}"))
+            if row:
+                quality_buttons.append(row)
 
-        quality_buttons.append([
-            InlineKeyboardButton(text=get_text("yt_audio_btn", lang), callback_data=f"yt:{video_id}:audio")
-        ])
-        quality_buttons.append([
-            InlineKeyboardButton(text=get_text("btn_cancel", lang), callback_data="yt:cancel")
-        ])
+            quality_buttons.append([
+                InlineKeyboardButton(text=get_text("yt_audio_btn", lang), callback_data=f"yt:{video_id}:audio")
+            ])
+            quality_buttons.append([
+                InlineKeyboardButton(text=get_text("btn_cancel", lang), callback_data="yt:cancel")
+            ])
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=quality_buttons)
-        text = (
-            f"🎬 <b>{html.escape(title)}</b>\n\n"
-            f"⏱ <code>{dur_str}</code> | 👤 <code>{html.escape(channel)}</code>\n\n"
-            f"{get_text('yt_select_quality', lang)}"
-        )
+            keyboard = InlineKeyboardMarkup(inline_keyboard=quality_buttons)
+            text = (
+                f"🎬 <b>{html.escape(title)}</b>\n\n"
+                f"⏱ <code>{dur_str}</code> | 👤 <code>{html.escape(channel)}</code>\n\n"
+                f"{get_text('yt_select_quality', lang)}"
+            )
 
-        thumbnail = info.get("thumbnail")
-        if thumbnail:
-            try:
-                await message.reply_photo(photo=thumbnail, caption=text, reply_markup=keyboard)
-                await status_msg.delete()
-                return
-            except Exception:
-                pass
+            thumbnail = info.get("thumbnail")
+            if thumbnail:
+                try:
+                    await message.reply_photo(photo=thumbnail, caption=text, reply_markup=keyboard)
+                    await status_msg.delete()
+                    return
+                except Exception:
+                    pass
 
-        await status_msg.edit_text(text, reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"YouTube info error: {e}", exc_info=True)
-        await status_msg.edit_text(get_text("err_general", lang))
+            await status_msg.edit_text(text, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"YouTube info error: {e}", exc_info=True)
+            await status_msg.edit_text(get_text("err_general", lang))
 
 @dp.callback_query(F.data.startswith("yt:"))
 async def handle_youtube_callback(callback: types.CallbackQuery):
@@ -682,173 +710,225 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
     quality_label = get_text("yt_audio_btn", lang) if quality == "audio" else f"{quality}p"
     status_msg = await callback.message.reply(get_text("yt_downloading", lang, quality=quality_label))
 
-    cache_key = f"yt_{video_id}_{quality}"
-    # 1. Check database cache
-    cached = await get_cached(cache_key)
-    if cached and cached.get("file_ids"):
-        media_items = cached.get("file_ids", [])
-        if media_items:
-            try:
-                caption_text = truncate_caption(cached.get("caption", ""))
-                item = media_items[0] if isinstance(media_items[0], dict) else {"file_id": media_items[0]}
-                f_id = item.get("file_id")
-                if quality == "audio":
-                    await safe_reply_audio(
-                        callback.message,
-                        audio=f_id,
-                        title=item.get("title", "YouTube Audio"),
-                        performer=item.get("performer", "YouTube"),
-                        duration=item.get("duration", 0),
-                        caption=caption_text
-                    )
-                else:
-                    await safe_reply_video(
-                        callback.message,
-                        video=f_id,
-                        caption=caption_text,
-                        width=item.get("width"),
-                        height=item.get("height"),
-                        duration=item.get("duration"),
-                        supports_streaming=True
-                    )
-                if callback.from_user:
-                    await log_download(callback.from_user.id, cache_key)
-                await status_msg.delete()
+    chat_action = ChatAction.RECORD_VOICE if quality == "audio" else ChatAction.UPLOAD_VIDEO
+    async with keep_chat_action(bot, callback.message.chat.id, chat_action):
+        cache_key = f"yt_{video_id}_{quality}"
+        # 1. Check database cache
+        cached = await get_cached(cache_key)
+        if cached and cached.get("file_ids"):
+            media_items = cached.get("file_ids", [])
+            if media_items:
+                try:
+                    caption_text = truncate_caption(cached.get("caption", ""))
+                    item = media_items[0] if isinstance(media_items[0], dict) else {"file_id": media_items[0]}
+                    f_id = item.get("file_id")
+                    if quality == "audio":
+                        await safe_reply_audio(
+                            callback.message,
+                            audio=f_id,
+                            title=item.get("title", "YouTube Audio"),
+                            performer=item.get("performer", "YouTube"),
+                            duration=item.get("duration", 0),
+                            caption=caption_text
+                        )
+                    else:
+                        await safe_reply_video(
+                            callback.message,
+                            video=f_id,
+                            caption=caption_text,
+                            width=item.get("width"),
+                            height=item.get("height"),
+                            duration=item.get("duration"),
+                            supports_streaming=True
+                        )
+                    if callback.from_user:
+                        await log_download(callback.from_user.id, cache_key)
+                    await status_msg.delete()
+                    return
+                except Exception as e:
+                    logger.warning(f"YouTube cache delivery failed, re-downloading: {e}")
+
+        task_dir = None
+        try:
+            async with DOWNLOAD_SEMAPHORE:
+                res = await download_youtube(video_id, quality)
+            task_dir = res.get("task_dir")
+            file_path = res.get("file_path")
+
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
+            if file_size_mb > 49.5:
+                # Register direct streaming token on our web server
+                token = secrets.token_urlsafe(16)
+                filename = os.path.basename(file_path)
+                title = res.get("title", "YouTube Media")
+                q_label = "صوتی (MP3)" if quality in ("audio", "mp3") else f"{quality}p"
+
+                DIRECT_DOWNLOADS[token] = {
+                    "file_path": file_path,
+                    "filename": filename,
+                    "title": title,
+                    "size_mb": file_size_mb,
+                    "quality": q_label,
+                    "task_dir": task_dir,
+                    "created_at": time.time(),
+                }
+                # Prevent the finally block from deleting task_dir while the user downloads
+                task_dir = None
+
+                server_url = get_server_base_url()
+                page_url = f"{server_url}/dl/{token}"
+                safe_ext = "mp3" if quality in ("audio", "mp3") else "mp4"
+                stream_url = f"{server_url}/file/{token}/video.{safe_ext}"
+
+                msg_text = (
+                    f"⚠️ <b>حجم فایل بیش از سقف ارسال مستقیم در تلگرام است ({file_size_mb:.1f} MB)</b>\n\n"
+                    f"🎬 <b>عنوان:</b> {title}\n"
+                    f"📊 <b>کیفیت انتخابی:</b> {q_label}\n"
+                    f"💾 <b>حجم دقیق:</b> {file_size_mb:.1f} مگابایت\n\n"
+                    "📌 طبق قوانین رسمی تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت امکان ارسال مستقیم در چت را ندارند.\n\n"
+                    "🚀 <b>روش‌های دریافت فایل کامل با نهایت سرعت:</b>\n"
+                    "۱️⃣ <b>کلیک روی دکمه‌های زیر</b> جهت ورود به صفحه اختصاصی دانلود و تماشای آنلاین\n"
+                    "۲️⃣ <b>یا لمس و کپی کردن لینک زیر</b> (با یک‌بار لمس متن زیر کپی می‌شود) و قرار دادن آن در مرورگر Chrome یا برنامه‌های دانلود منیجر (مانند ADM یا IDM):\n\n"
+                    f"🔗 <b>لینک مستقیم دانلود:</b>\n"
+                    f"<code>{stream_url}</code>"
+                )
+                reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text=f"🌐 ورود به صفحه دانلود و تماشا ({file_size_mb:.1f} MB)", url=page_url)],
+                    [InlineKeyboardButton(text="📥 دانلود مستقیم فایل (مخصوص مرورگر/ADM)", url=stream_url)]
+                ])
+
+                await status_msg.edit_text(msg_text, reply_markup=reply_markup)
                 return
-            except Exception as e:
-                logger.warning(f"YouTube cache delivery failed, re-downloading: {e}")
 
-    if quality == "audio":
-        await bot.send_chat_action(callback.message.chat.id, ChatAction.RECORD_VOICE)
-    else:
-        await bot.send_chat_action(callback.message.chat.id, ChatAction.UPLOAD_VIDEO)
+            formatted_caption = format_caption(f"🎵 {res.get('title', '')}" if quality == "audio" else res.get("title", ""))
+            if quality == "audio":
+                sent = await safe_reply_audio(
+                    callback.message,
+                    audio=FSInputFile(file_path),
+                    title=res.get("title", "YouTube Audio"),
+                    performer=res.get("artist") or "YouTube",
+                    duration=res.get("duration") or 0,
+                    caption=formatted_caption
+                )
+                if sent and sent.audio:
+                    await save_cache(cache_key, "audio", [{
+                        "file_id": sent.audio.file_id,
+                        "title": res.get("title", "YouTube Audio"),
+                        "performer": res.get("artist") or "YouTube",
+                        "duration": res.get("duration") or 0
+                    }], formatted_caption)
+            else:
+                v_kwargs = {"supports_streaming": True}
+                if res.get("width") and res.get("width") > 0:
+                    v_kwargs["width"] = res.get("width")
+                if res.get("height") and res.get("height") > 0:
+                    v_kwargs["height"] = res.get("height")
+                if res.get("duration") and res.get("duration") > 0:
+                    v_kwargs["duration"] = int(res.get("duration"))
 
-    task_dir = None
-    try:
-        async with DOWNLOAD_SEMAPHORE:
-            res = await download_youtube(video_id, quality)
-        task_dir = res.get("task_dir")
-        file_path = res.get("file_path")
+                sent = await safe_reply_video(
+                    callback.message,
+                    video=FSInputFile(file_path),
+                    caption=formatted_caption,
+                    **v_kwargs
+                )
+                if sent and sent.video:
+                    await save_cache(cache_key, "video", [{
+                        "file_id": sent.video.file_id,
+                        "width": res.get("width"),
+                        "height": res.get("height"),
+                        "duration": res.get("duration")
+                    }], formatted_caption)
 
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
-        if file_size_mb > 49.5:
-            # Register direct streaming token on our web server
-            token = secrets.token_urlsafe(16)
-            filename = os.path.basename(file_path)
-            title = res.get("title", "YouTube Media")
-            q_label = "صوتی (MP3)" if quality in ("audio", "mp3") else f"{quality}p"
-
-            DIRECT_DOWNLOADS[token] = {
-                "file_path": file_path,
-                "filename": filename,
-                "title": title,
-                "size_mb": file_size_mb,
-                "quality": q_label,
-                "task_dir": task_dir,
-                "created_at": time.time(),
-            }
-            # Prevent the finally block from deleting task_dir while the user downloads
-            task_dir = None
-
-            server_url = get_server_base_url()
-            page_url = f"{server_url}/dl/{token}"
-            safe_ext = "mp3" if quality in ("audio", "mp3") else "mp4"
-            stream_url = f"{server_url}/file/{token}/video.{safe_ext}"
-
-            msg_text = (
-                f"⚠️ <b>حجم فایل بیش از سقف ارسال مستقیم در تلگرام است ({file_size_mb:.1f} MB)</b>\n\n"
-                f"🎬 <b>عنوان:</b> {title}\n"
-                f"📊 <b>کیفیت انتخابی:</b> {q_label}\n"
-                f"💾 <b>حجم دقیق:</b> {file_size_mb:.1f} مگابایت\n\n"
-                "📌 طبق قوانین رسمی تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت امکان ارسال مستقیم در چت را ندارند.\n\n"
-                "🚀 <b>روش‌های دریافت فایل کامل با نهایت سرعت:</b>\n"
-                "۱️⃣ <b>کلیک روی دکمه‌های زیر</b> جهت ورود به صفحه اختصاصی دانلود و تماشای آنلاین\n"
-                "۲️⃣ <b>یا لمس و کپی کردن لینک زیر</b> (با یک‌بار لمس متن زیر کپی می‌شود) و قرار دادن آن در مرورگر Chrome یا برنامه‌های دانلود منیجر (مانند ADM یا IDM):\n\n"
-                f"🔗 <b>لینک مستقیم دانلود:</b>\n"
-                f"<code>{stream_url}</code>"
-            )
-            reply_markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=f"🌐 ورود به صفحه دانلود و تماشا ({file_size_mb:.1f} MB)", url=page_url)],
-                [InlineKeyboardButton(text="📥 دانلود مستقیم فایل (مخصوص مرورگر/ADM)", url=stream_url)]
-            ])
-
-            await status_msg.edit_text(msg_text, reply_markup=reply_markup)
-            return
-
-        formatted_caption = format_caption(f"🎵 {res.get('title', '')}" if quality == "audio" else res.get("title", ""))
-        if quality == "audio":
-            sent = await safe_reply_audio(
-                callback.message,
-                audio=FSInputFile(file_path),
-                title=res.get("title", "YouTube Audio"),
-                performer=res.get("artist") or "YouTube",
-                duration=res.get("duration") or 0,
-                caption=formatted_caption
-            )
-            if sent and sent.audio:
-                await save_cache(cache_key, "audio", [{
-                    "file_id": sent.audio.file_id,
-                    "title": res.get("title", "YouTube Audio"),
-                    "performer": res.get("artist") or "YouTube",
-                    "duration": res.get("duration") or 0
-                }], formatted_caption)
-        else:
-            v_kwargs = {"supports_streaming": True}
-            if res.get("width") and res.get("width") > 0:
-                v_kwargs["width"] = res.get("width")
-            if res.get("height") and res.get("height") > 0:
-                v_kwargs["height"] = res.get("height")
-            if res.get("duration") and res.get("duration") > 0:
-                v_kwargs["duration"] = int(res.get("duration"))
-
-            sent = await safe_reply_video(
-                callback.message,
-                video=FSInputFile(file_path),
-                caption=formatted_caption,
-                **v_kwargs
-            )
-            if sent and sent.video:
-                await save_cache(cache_key, "video", [{
-                    "file_id": sent.video.file_id,
-                    "width": res.get("width"),
-                    "height": res.get("height"),
-                    "duration": res.get("duration")
-                }], formatted_caption)
-
-        if callback.from_user:
-            await log_download(callback.from_user.id, cache_key)
-        await status_msg.delete()
-    except Exception as e:
-        logger.error(f"YouTube download error: {e}", exc_info=True)
-        await status_msg.edit_text(get_text("err_general", lang))
-    finally:
-        if task_dir:
-            cleanup_task_dir(task_dir)
+            if callback.from_user:
+                await log_download(callback.from_user.id, cache_key)
+            await status_msg.delete()
+        except Exception as e:
+            logger.error(f"YouTube download error: {e}", exc_info=True)
+            await status_msg.edit_text(get_text("err_general", lang))
+        finally:
+            if task_dir:
+                cleanup_task_dir(task_dir)
 
 async def process_spotify_url(message: types.Message, url: str):
     user_id = message.from_user.id if message.from_user else 0
     lang = await get_user_lang(user_id)
     status_msg = await message.reply(get_text("spotify_downloading", lang))
-    await bot.send_chat_action(message.chat.id, ChatAction.RECORD_VOICE)
 
-    # Pre-check if album or single track
-    try:
-        sp_info = await get_spotify_info(url)
-    except Exception as e:
-        logger.warning(f"Spotify info pre-fetch note: {e}")
-        sp_info = None
+    async with keep_chat_action(bot, message.chat.id, ChatAction.RECORD_VOICE):
+        # Pre-check if album or single track
+        try:
+            sp_info = await get_spotify_info(url)
+        except Exception as e:
+            logger.warning(f"Spotify info pre-fetch note: {e}")
+            sp_info = None
 
-    if sp_info and sp_info.get("type") == "album":
-        tracks = sp_info.get("tracks", [])
-        album_title = sp_info.get("title", "Spotify Album")
-        artist = sp_info.get("artist", "")
-        await status_msg.edit_text(
-            f"💿 <b>{html.escape(album_title)}</b>\n👤 {html.escape(artist)}\n\n"
-            f"در حال دریافت {len(tracks[:20])} قطعه از آلبوم... ⏳"
-        )
-        for t_idx, track in enumerate(tracks[:20], 1):
-            t_id = track.get("id") or f"{track.get('title')}_{track.get('artist')}"
-            cache_key = f"sp_{t_id}"
+        if sp_info and sp_info.get("type") == "album":
+            tracks = sp_info.get("tracks", [])
+            album_title = sp_info.get("title", "Spotify Album")
+            artist = sp_info.get("artist", "")
+            await status_msg.edit_text(
+                f"💿 <b>{html.escape(album_title)}</b>\n👤 {html.escape(artist)}\n\n"
+                f"در حال دریافت {len(tracks[:20])} قطعه از آلبوم... ⏳"
+            )
+            for t_idx, track in enumerate(tracks[:20], 1):
+                t_id = track.get("id") or f"{track.get('title')}_{track.get('artist')}"
+                cache_key = f"sp_{t_id}"
+                cached = await get_cached(cache_key)
+                if cached and cached.get("file_ids"):
+                    c_item = cached["file_ids"][0] if isinstance(cached["file_ids"][0], dict) else {"file_id": cached["file_ids"][0]}
+                    try:
+                        await safe_reply_audio(
+                            message,
+                            audio=c_item["file_id"],
+                            title=c_item.get("title", track.get("title")),
+                            performer=c_item.get("artist", track.get("artist")),
+                            duration=c_item.get("duration", track.get("duration", 0)),
+                            caption=format_caption(f"🎵 {track.get('title', '')} ({t_idx}/{len(tracks[:20])})\n👤 {track.get('artist', '')}")
+                        )
+                        continue
+                    except Exception:
+                        pass
+
+                t_dir = None
+                try:
+                    async with DOWNLOAD_SEMAPHORE:
+                        t_res = await download_spotify(track)
+                    t_dir = t_res.get("task_dir")
+                    f_path = t_res.get("file_path")
+                    if f_path and os.path.exists(f_path):
+                        sent = await safe_reply_audio(
+                            message,
+                            audio=FSInputFile(f_path),
+                            title=t_res.get("title", track.get("title")),
+                            performer=t_res.get("artist", track.get("artist")),
+                            duration=t_res.get("duration", 0),
+                            caption=format_caption(f"🎵 {t_res.get('title', '')} ({t_idx}/{len(tracks[:20])})\n👤 {t_res.get('artist', '')}")
+                        )
+                        if sent and sent.audio:
+                            await save_cache(cache_key, "audio", [{
+                                "file_id": sent.audio.file_id,
+                                "title": t_res.get("title"),
+                                "artist": t_res.get("artist"),
+                                "duration": int(round(float(t_res.get("duration", 0) or 0))) if t_res.get("duration") else 0
+                            }], f"🎵 {t_res.get('title', '')}")
+                except Exception as te:
+                    logger.error(f"Error downloading album track {track.get('title')}: {te}")
+                finally:
+                    if t_dir:
+                        cleanup_task_dir(t_dir)
+
+            if message.from_user:
+                await log_download(message.from_user.id, "spotify_album")
+            await status_msg.delete()
+            return
+
+        # Single track flow
+        track_match = re.search(r'track/([a-zA-Z0-9]+)', url)
+        track_id = track_match.group(1) if track_match else None
+        cache_key = f"sp_{track_id}" if track_id else None
+
+        if cache_key:
             cached = await get_cached(cache_key)
             if cached and cached.get("file_ids"):
                 c_item = cached["file_ids"][0] if isinstance(cached["file_ids"][0], dict) else {"file_id": cached["file_ids"][0]}
@@ -856,114 +936,59 @@ async def process_spotify_url(message: types.Message, url: str):
                     await safe_reply_audio(
                         message,
                         audio=c_item["file_id"],
-                        title=c_item.get("title", track.get("title")),
-                        performer=c_item.get("artist", track.get("artist")),
-                        duration=c_item.get("duration", track.get("duration", 0)),
-                        caption=format_caption(f"🎵 {track.get('title', '')} ({t_idx}/{len(tracks[:20])})\n👤 {track.get('artist', '')}")
+                        title=c_item.get("title", "Spotify Track"),
+                        performer=c_item.get("artist", "Spotify"),
+                        duration=c_item.get("duration", 0),
+                        caption=cached.get("caption", "")
                     )
-                    continue
-                except Exception:
-                    pass
+                    if message.from_user:
+                        await log_download(message.from_user.id, cache_key)
+                    await status_msg.delete()
+                    return
+                except Exception as e:
+                    logger.warning(f"Spotify cache delivery failed: {e}")
 
-            t_dir = None
-            try:
-                async with DOWNLOAD_SEMAPHORE:
-                    t_res = await download_spotify(track)
-                t_dir = t_res.get("task_dir")
-                f_path = t_res.get("file_path")
-                if f_path and os.path.exists(f_path):
-                    sent = await safe_reply_audio(
-                        message,
-                        audio=FSInputFile(f_path),
-                        title=t_res.get("title", track.get("title")),
-                        performer=t_res.get("artist", track.get("artist")),
-                        duration=t_res.get("duration", 0),
-                        caption=format_caption(f"🎵 {t_res.get('title', '')} ({t_idx}/{len(tracks[:20])})\n👤 {t_res.get('artist', '')}")
-                    )
-                    if sent and sent.audio:
-                        await save_cache(cache_key, "audio", [{
-                            "file_id": sent.audio.file_id,
-                            "title": t_res.get("title"),
-                            "artist": t_res.get("artist"),
-                            "duration": int(round(float(t_res.get("duration", 0) or 0))) if t_res.get("duration") else 0
-                        }], f"🎵 {t_res.get('title', '')}")
-            except Exception as te:
-                logger.error(f"Error downloading album track {track.get('title')}: {te}")
-            finally:
-                if t_dir:
-                    cleanup_task_dir(t_dir)
-
-        if message.from_user:
-            await log_download(message.from_user.id, "spotify_album")
-        await status_msg.delete()
-        return
-
-    # Single track flow
-    track_match = re.search(r'track/([a-zA-Z0-9]+)', url)
-    track_id = track_match.group(1) if track_match else None
-    cache_key = f"sp_{track_id}" if track_id else None
-
-    if cache_key:
-        cached = await get_cached(cache_key)
-        if cached and cached.get("file_ids"):
-            c_item = cached["file_ids"][0] if isinstance(cached["file_ids"][0], dict) else {"file_id": cached["file_ids"][0]}
-            try:
-                await safe_reply_audio(
-                    message,
-                    audio=c_item["file_id"],
-                    title=c_item.get("title", "Spotify Track"),
-                    performer=c_item.get("artist", "Spotify"),
-                    duration=c_item.get("duration", 0),
-                    caption=cached.get("caption", "")
+        task_dir = None
+        try:
+            async with DOWNLOAD_SEMAPHORE:
+                res = await download_spotify(url)
+            task_dir = res.get("task_dir")
+            file_path = res.get("file_path")
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if file_path and os.path.exists(file_path) else 0
+            if file_size_mb > 49.5:
+                await status_msg.edit_text(
+                    f"⚠️ <b>حجم فایل صوتی بیش از حد مجاز تلگرام است ({file_size_mb:.1f} MB):</b>\n\n"
+                    "به دلیل محدودیت ربات‌های تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت قابل ارسال نیستند 🔄"
                 )
-                if message.from_user:
-                    await log_download(message.from_user.id, cache_key)
-                await status_msg.delete()
                 return
-            except Exception as e:
-                logger.warning(f"Spotify cache delivery failed: {e}")
 
-    task_dir = None
-    try:
-        async with DOWNLOAD_SEMAPHORE:
-            res = await download_spotify(url)
-        task_dir = res.get("task_dir")
-        file_path = res.get("file_path")
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if file_path and os.path.exists(file_path) else 0
-        if file_size_mb > 49.5:
-            await status_msg.edit_text(
-                f"⚠️ <b>حجم فایل صوتی بیش از حد مجاز تلگرام است ({file_size_mb:.1f} MB):</b>\n\n"
-                "به دلیل محدودیت ربات‌های تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت قابل ارسال نیستند 🔄"
+            caption = format_caption(f"🎵 {res.get('title', '')}\n👤 {res.get('artist', '')}")
+            sent = await safe_reply_audio(
+                message,
+                audio=FSInputFile(file_path),
+                title=res.get("title", "Spotify Track"),
+                performer=res.get("artist") or "Spotify",
+                duration=res.get("duration") or 0,
+                caption=caption
             )
-            return
+            if sent and sent.audio and cache_key:
+                await save_cache(cache_key, "audio", [{
+                    "file_id": sent.audio.file_id,
+                    "title": res.get("title", "Spotify Track"),
+                    "artist": res.get("artist") or "Spotify",
+                    "duration": int(round(float(res.get("duration") or 0))) if res.get("duration") else 0
+                }], caption)
 
-        caption = format_caption(f"🎵 {res.get('title', '')}\n👤 {res.get('artist', '')}")
-        sent = await safe_reply_audio(
-            message,
-            audio=FSInputFile(file_path),
-            title=res.get("title", "Spotify Track"),
-            performer=res.get("artist") or "Spotify",
-            duration=res.get("duration") or 0,
-            caption=caption
-        )
-        if sent and sent.audio and cache_key:
-            await save_cache(cache_key, "audio", [{
-                "file_id": sent.audio.file_id,
-                "title": res.get("title", "Spotify Track"),
-                "artist": res.get("artist") or "Spotify",
-                "duration": int(round(float(res.get("duration") or 0))) if res.get("duration") else 0
-            }], caption)
+            if message.from_user:
+                await log_download(message.from_user.id, cache_key or "spotify")
+            await status_msg.delete()
 
-        if message.from_user:
-            await log_download(message.from_user.id, cache_key or "spotify")
-        await status_msg.delete()
-
-    except Exception as e:
-        logger.error(f"Spotify download error: {e}", exc_info=True)
-        await status_msg.edit_text(get_text("err_general", lang))
-    finally:
-        if task_dir:
-            cleanup_task_dir(task_dir)
+        except Exception as e:
+            logger.error(f"Spotify download error: {e}", exc_info=True)
+            await status_msg.edit_text(get_text("err_general", lang))
+        finally:
+            if task_dir:
+                cleanup_task_dir(task_dir)
 
 async def process_generic_url(message: types.Message, url: str, platform: str):
     user_id = message.from_user.id if message.from_user else 0
@@ -977,48 +1002,50 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
     }
     p_name = plat_names.get(platform, platform.capitalize())
     status_msg = await message.reply(get_text("platform_downloading", lang, platform=p_name))
-    task_dir = None
-    try:
-        async with DOWNLOAD_SEMAPHORE:
-            res = await download_generic(url, platform)
-        task_dir = res.get("task_dir")
-        m_type = res.get("type")
+    action = ChatAction.RECORD_VOICE if platform == "soundcloud" else ChatAction.UPLOAD_VIDEO
+    async with keep_chat_action(bot, message.chat.id, action):
+        task_dir = None
+        try:
+            async with DOWNLOAD_SEMAPHORE:
+                res = await download_generic(url, platform)
+            task_dir = res.get("task_dir")
+            m_type = res.get("type")
 
-        if m_type == "audio":
-            await safe_reply_audio(
-                message,
-                audio=FSInputFile(res["file_path"]),
-                title=res.get("title", "Audio"),
-                performer=res.get("artist") or p_name,
-                duration=res.get("duration") or 0,
-                caption=format_caption(f"🎵 {res.get('title', '')}")
-            )
-        elif m_type == "photo":
-            await safe_reply_photo(
-                message,
-                photo=FSInputFile(res["file_path"]),
-                caption=format_caption(res.get("title", ""))
-            )
-        else:
-            await safe_reply_video(
-                message,
-                video=FSInputFile(res["file_path"]),
-                caption=format_caption(res.get("title", "")),
-                width=res.get("width"),
-                height=res.get("height"),
-                duration=res.get("duration"),
-                supports_streaming=True
-            )
+            if m_type == "audio":
+                await safe_reply_audio(
+                    message,
+                    audio=FSInputFile(res["file_path"]),
+                    title=res.get("title", "Audio"),
+                    performer=res.get("artist") or p_name,
+                    duration=res.get("duration") or 0,
+                    caption=format_caption(f"🎵 {res.get('title', '')}")
+                )
+            elif m_type == "photo":
+                await safe_reply_photo(
+                    message,
+                    photo=FSInputFile(res["file_path"]),
+                    caption=format_caption(res.get("title", ""))
+                )
+            else:
+                await safe_reply_video(
+                    message,
+                    video=FSInputFile(res["file_path"]),
+                    caption=format_caption(res.get("title", "")),
+                    width=res.get("width"),
+                    height=res.get("height"),
+                    duration=res.get("duration"),
+                    supports_streaming=True
+                )
 
-        if message.from_user:
-            await log_download(message.from_user.id, platform)
-        await status_msg.delete()
-    except Exception as e:
-        logger.error(f"Generic download error ({platform}): {e}", exc_info=True)
-        await status_msg.edit_text(get_text("err_general", lang))
-    finally:
-        if task_dir:
-            cleanup_task_dir(task_dir)
+            if message.from_user:
+                await log_download(message.from_user.id, platform)
+            await status_msg.delete()
+        except Exception as e:
+            logger.error(f"Generic download error ({platform}): {e}", exc_info=True)
+            await status_msg.edit_text(get_text("err_general", lang))
+        finally:
+            if task_dir:
+                cleanup_task_dir(task_dir)
 
 @dp.message(F.text.regexp(GENERAL_URL_PATTERN))
 async def handle_url_message(message: types.Message):
@@ -1374,7 +1401,7 @@ async def health_check_handler(request):
             <p>Telegram Bot: <a href="https://t.me/instajetloadbot" style="color: #38bdf8;">@instajetloadbot</a></p>
             <p>Users: {stats['users']} | Downloads: {stats['downloads']}</p>
             <p style="color: #4ade80;">Status: Healthy & Active</p>
-            <p style="color: #94a3b8; font-size: 13px;">Version: v3.5-spotify-pydantic-validation-fixed | Branch: master</p>
+            <p style="color: #94a3b8; font-size: 13px;">Version: v3.6-continuous-chat-action-and-spotify-fix | Branch: master</p>
         </body>
     </html>
     """
