@@ -649,13 +649,26 @@ async def process_youtube_url(message: types.Message, url: str):
             video_id = info["id"]
             title = info.get("title", "YouTube Video")
             duration = info.get("duration", 0)
+            qualities_data = info.get("qualities_data") or {}
+            v_quals = qualities_data.get("video_qualities") or []
+
+            if not duration and video_id:
+                try:
+                    from downloader import fetch_youtube_web_info
+                    w_info = fetch_youtube_web_info(video_id)
+                    if w_info.get("duration"):
+                        duration = w_info["duration"]
+                        info["duration"] = duration
+                        qualities_data = parse_youtube_qualities({"duration": duration, "formats": []})
+                        v_quals = qualities_data.get("video_qualities") or []
+                except Exception:
+                    pass
+
             dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "0:00"
             channel = info.get("channel", "YouTube")
             resolutions = info.get("resolutions") or [720, 480, 360]
 
             # Build inline keyboard for quality selection
-            qualities_data = info.get("qualities_data") or {}
-            v_quals = qualities_data.get("video_qualities") or []
 
             quality_buttons = []
             if v_quals:
@@ -790,6 +803,18 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
             formatted_caption = format_caption(f"🎵 {res.get('title', '')}" if is_audio else res.get("title", ""))
 
+            dur_val = int(res.get("duration") or 0)
+            width_val = int(res.get("width") or 0)
+            height_val = int(res.get("height") or 0)
+            if not is_audio and (not dur_val or dur_val <= 0 or not width_val or width_val <= 0):
+                w_chk, h_chk, dur_chk = get_media_dimensions(file_path)
+                dur_val = dur_chk or dur_val
+                width_val = width_val or w_chk or 1280
+                height_val = height_val or h_chk or 720
+
+            if not is_audio and (not dur_val or dur_val <= 0):
+                raise ValueError("فایل ویدیو به طور کامل دانلود نشد یا متادیتای آن قابل خواندن نیست.")
+
             if file_size_mb > 49.5:
                 # MTProto direct delivery up to 2,000 MB (2 GB)
                 if file_size_mb <= 2000.0:
@@ -802,16 +827,16 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                                 caption=formatted_caption,
                                 title=res.get("title", "YouTube Audio"),
                                 performer=res.get("artist") or "YouTube",
-                                duration=res.get("duration") or 0,
+                                duration=dur_val,
                             )
                         else:
                             sent_ok = await send_mtproto_video(
                                 chat_id=callback.message.chat.id,
                                 file_path=file_path,
                                 caption=formatted_caption,
-                                duration=res.get("duration") or 0,
-                                width=res.get("width") or 0,
-                                height=res.get("height") or 0,
+                                duration=dur_val,
+                                width=width_val,
+                                height=height_val,
                                 thumb=thumb_file,
                             )
                         if sent_ok:
@@ -869,7 +894,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                     audio=FSInputFile(file_path),
                     title=res.get("title", "YouTube Audio"),
                     performer=res.get("artist") or "YouTube",
-                    duration=res.get("duration") or 0,
+                    duration=dur_val,
                     caption=formatted_caption
                 )
                 if sent and sent.audio:
@@ -877,18 +902,18 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                         "file_id": sent.audio.file_id,
                         "title": res.get("title", "YouTube Audio"),
                         "performer": res.get("artist") or "YouTube",
-                        "duration": res.get("duration") or 0
+                        "duration": dur_val
                     }], formatted_caption)
             else:
                 v_kwargs = {"supports_streaming": True}
                 if thumb_file and os.path.exists(thumb_file):
                     v_kwargs["thumbnail"] = FSInputFile(thumb_file)
-                if res.get("width") and res.get("width") > 0:
-                    v_kwargs["width"] = res.get("width")
-                if res.get("height") and res.get("height") > 0:
-                    v_kwargs["height"] = res.get("height")
-                if res.get("duration") and res.get("duration") > 0:
-                    v_kwargs["duration"] = int(res.get("duration"))
+                if width_val > 0:
+                    v_kwargs["width"] = width_val
+                if height_val > 0:
+                    v_kwargs["height"] = height_val
+                if dur_val > 0:
+                    v_kwargs["duration"] = dur_val
 
                 sent = await safe_reply_video(
                     callback.message,
@@ -899,9 +924,9 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 if sent and sent.video:
                     await save_cache(cache_key, "video", [{
                         "file_id": sent.video.file_id,
-                        "width": res.get("width"),
-                        "height": res.get("height"),
-                        "duration": res.get("duration")
+                        "width": width_val,
+                        "height": height_val,
+                        "duration": dur_val
                     }], formatted_caption)
 
             if callback.from_user:

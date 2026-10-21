@@ -172,6 +172,36 @@ def extract_shortcode(url: str) -> Optional[str]:
         return yt_id
     return None
 
+def probe_with_ffmpeg(file_path: str) -> tuple[int, int, int]:
+    """Probes video or audio file for width, height, and duration (in seconds) using ffmpeg."""
+    if not file_path or not os.path.exists(file_path):
+        return 0, 0, 0
+    ff_bin = get_ffmpeg_bin() or "ffmpeg"
+    try:
+        res = subprocess.run(
+            [ff_bin, "-i", file_path],
+            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            text=True,
+            timeout=10
+        )
+        out = res.stderr
+        dur_m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", out)
+        duration = 0
+        if dur_m:
+            h, m, s = float(dur_m.group(1)), float(dur_m.group(2)), float(dur_m.group(3))
+            duration = int(h * 3600 + m * 60 + s)
+        
+        w, h = 0, 0
+        res_m = re.search(r"Stream.*Video:.*?(\d{3,4})x(\d{3,4})", out)
+        if res_m:
+            w, h = int(res_m.group(1)), int(res_m.group(2))
+            
+        return w, h, duration
+    except Exception as e:
+        print(f"probe_with_ffmpeg error for {file_path}: {e}")
+        return 0, 0, 0
+
 def get_media_dimensions(file_path: str):
     """Extract exact width, height, and duration from video or image."""
     width, height, duration = None, None, None
@@ -186,9 +216,26 @@ def get_media_dimensions(file_path: str):
                     if metadata.has("height"):
                         height = int(metadata.get("height"))
                     if metadata.has("duration"):
-                        duration = int(metadata.get("duration").seconds)
+                        dur_obj = metadata.get("duration")
+                        if hasattr(dur_obj, "total_seconds"):
+                            duration = int(dur_obj.total_seconds())
+                        elif hasattr(dur_obj, "seconds"):
+                            duration = int(dur_obj.seconds)
+                        else:
+                            duration = int(dur_obj)
     except Exception as e:
         print(f"Metadata extraction error for {file_path}: {e}")
+
+    # Fallback to ffmpeg probe if duration or dimensions are missing/invalid
+    if not duration or duration <= 0 or not width or width <= 0:
+        w_ff, h_ff, dur_ff = probe_with_ffmpeg(file_path)
+        if dur_ff > 0:
+            duration = dur_ff
+        if w_ff > 0:
+            width = w_ff
+        if h_ff > 0:
+            height = h_ff
+
     return width, height, duration
 
 def _download_with_ytdlp(url: str, task_dir: str) -> Dict[str, Any]:
@@ -569,33 +616,43 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
     if not file_path or not os.path.exists(file_path):
         return file_path, None
 
-    ff_dir = get_ffmpeg_dir()
-    ff_bin = shutil.which("ffmpeg", path=ff_dir) or shutil.which("ffmpeg") or "ffmpeg"
-
+    ff_bin = get_ffmpeg_bin() or "ffmpeg"
     task_dir = os.path.dirname(file_path)
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     thumb_path = os.path.join(task_dir, f"{base_name}_thumb.jpg")
 
-    # 1. Generate thumbnail frame
-    try:
-        subprocess.run(
-            [ff_bin, "-y", "-ss", "00:00:01", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
-    except Exception as e:
-        print(f"Thumbnail extraction failed: {e}")
+    # 1. Generate thumbnail frame (try 1 second first, fallback to frame 0)
+    if os.path.getsize(file_path) > 10000:
+        try:
+            subprocess.run(
+                [ff_bin, "-y", "-ss", "00:00:01", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except Exception as e:
+            print(f"Thumbnail extraction at 1s note: {e}")
+
+        if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0:
+            try:
+                subprocess.run(
+                    [ff_bin, "-y", "-ss", "00:00:00", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+            except Exception:
+                pass
 
     # 2. Faststart moov atom to beginning of MP4
-    if file_path.endswith(".mp4"):
+    if file_path.endswith(".mp4") and os.path.getsize(file_path) > 10000:
         fast_path = os.path.join(task_dir, f"{base_name}_fast.mp4")
         try:
             res = subprocess.run(
                 [ff_bin, "-y", "-i", file_path, "-c", "copy", "-movflags", "+faststart", fast_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=60,
+                timeout=15,
             )
             if res.returncode == 0 and os.path.exists(fast_path) and os.path.getsize(fast_path) > 1024:
                 os.replace(fast_path, file_path)
@@ -614,46 +671,73 @@ YT_EXTRACTOR_ARGS = {
     }
 }
 
+def fetch_youtube_web_info(video_id: str) -> Dict[str, Any]:
+    """Scrapes title, channel, duration, and thumbnail directly from YouTube HTML without yt-dlp."""
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    title, duration, channel = "YouTube Video", 0, "YouTube"
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+
+        dur_m = re.search(r'\"approxDurationMs\":\"(\d+)\"', html)
+        if dur_m:
+            duration = int(dur_m.group(1)) // 1000
+        if not duration:
+            iso_m = re.search(r'itemprop=\"duration\" content=\"PT([^\"]+)\"', html)
+            if iso_m:
+                raw = iso_m.group(1)
+                h = int(re.search(r'(\d+)H', raw).group(1)) if 'H' in raw else 0
+                m = int(re.search(r'(\d+)M', raw).group(1)) if 'M' in raw else 0
+                s = int(re.search(r'(\d+)S', raw).group(1)) if 'S' in raw else 0
+                duration = h * 3600 + m * 60 + s
+
+        title_m = re.search(r'<meta property=\"og:title\" content=\"([^\"]+)\"', html) or re.search(r'\"title\":\"([^\"]+)\"', html)
+        if title_m:
+            title = title_m.group(1).encode("utf-8").decode("unicode_escape", "ignore")
+
+        ch_m = re.search(r'<link itemprop=\"name\" content=\"([^\"]+)\"', html) or re.search(r'\"author\":\"([^\"+]+)\"', html)
+        if ch_m:
+            channel = ch_m.group(1).encode("utf-8").decode("unicode_escape", "ignore")
+    except Exception as e:
+        print(f"Direct YouTube web scrape note: {e}")
+
+    if not title or title == "YouTube Video":
+        try:
+            oe_url = f"https://www.youtube.com/oembed?url={url}&format=json"
+            r = requests.get(oe_url, headers=headers, timeout=6)
+            if r.status_code == 200:
+                oe_data = r.json()
+                title = oe_data.get("title") or title
+                channel = oe_data.get("author_name") or channel
+        except Exception:
+            pass
+
+    return {
+        "title": title,
+        "duration": duration,
+        "channel": channel,
+        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    }
+
 def parse_youtube_qualities(info: Dict[str, Any]) -> Dict[str, Any]:
     """Extracts available resolutions with exact pre-calculated file sizes formatted in Persian."""
-    duration = info.get("duration") or 0
+    duration = int(info.get("duration") or 0)
     formats = info.get("formats", []) or []
 
-    best_audio_size = 0
-    low_audio_size = 0
-    audio_formats = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") != "none"]
-    for f in audio_formats:
-        s = f.get("filesize") or f.get("filesize_approx") or 0
-        abr = f.get("abr") or 0
-        if s > best_audio_size:
-            best_audio_size = s
-        if abr and abr <= 130 and (low_audio_size == 0 or s < low_audio_size):
-            low_audio_size = s
-
-    if not best_audio_size and duration:
-        best_audio_size = int(duration * 192 * 1024 / 8)
-    if not low_audio_size and duration:
-        low_audio_size = int(duration * 128 * 1024 / 8)
-
     target_resolutions = [1080, 720, 480, 360, 240, 144]
-    heights = {f.get("height") for f in formats if f.get("height") and f.get("vcodec") != "none"}
-    available_targets = [tr for tr in target_resolutions if any(vh >= tr for vh in heights)] if heights else [720, 480, 360]
-
-    res_map = {}
-    for tr in available_targets:
-        # Check if exact format matches
-        matching_v = [f for f in formats if f.get("height") == tr and f.get("vcodec") != "none"]
-        if matching_v:
-            v_size = matching_v[0].get("filesize") or matching_v[0].get("filesize_approx") or 0
-        else:
-            v_size = 0
-
-        if not v_size and duration:
-            tbr_estimate = tr * 2.2 if tr >= 720 else tr * 1.5
-            v_size = int(duration * tbr_estimate * 1024 / 8)
-
-        total_sz = v_size + best_audio_size
-        res_map[tr] = total_sz
+    bitrates = {
+        1080: 2500 + 128,
+        720: 1500 + 128,
+        480: 800 + 128,
+        360: 450 + 96,
+        240: 250 + 64,
+        144: 100 + 48,
+    }
 
     def to_persian_label(bytes_val: int) -> str:
         if not bytes_val or bytes_val <= 0:
@@ -668,21 +752,53 @@ def parse_youtube_qualities(info: Dict[str, Any]) -> Dict[str, Any]:
         fa_digits = str.maketrans("0123456789.", "۰۱۲۳۴۵۶۷۸۹٫")
         return f"{val_str.translate(fa_digits)} {unit}"
 
-    res_list = []
+    best_audio_size = 0
+    low_audio_size = 0
+    audio_formats = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") != "none"]
+    for f in audio_formats:
+        s = f.get("filesize") or f.get("filesize_approx") or 0
+        abr = f.get("abr") or 0
+        if s > best_audio_size:
+            best_audio_size = s
+        if abr and abr <= 130 and (low_audio_size == 0 or s < low_audio_size):
+            low_audio_size = s
+
+    if not best_audio_size and duration > 0:
+        best_audio_size = int(duration * 128 * 1000 / 8)
+    if not low_audio_size and duration > 0:
+        low_audio_size = int(duration * 48 * 1000 / 8)
+
+    heights = {f.get("height") for f in formats if f.get("height") and f.get("vcodec") != "none"}
+    max_height = max(heights) if heights else 1080
+
+    video_quals = []
     for tr in target_resolutions:
-        if tr in res_map:
-            sz = res_map[tr]
-            res_list.append({
-                "res": tr,
-                "size_bytes": sz,
-                "label": f"{tr}p · {to_persian_label(sz)}" if sz else f"{tr}p"
-            })
+        if heights and tr > max_height and tr > 720:
+            continue
+
+        matching_v = [f for f in formats if f.get("height") == tr and f.get("vcodec") != "none"]
+        sz = 0
+        if matching_v:
+            sz = matching_v[0].get("filesize") or matching_v[0].get("filesize_approx") or 0
+            if sz:
+                sz += best_audio_size
+
+        if not sz and duration > 0:
+            kbps = bitrates.get(tr, 800)
+            sz = int(duration * kbps * 1000 / 8)
+
+        lbl = f"{tr}p · {to_persian_label(sz)}" if sz else f"{tr}p"
+        video_quals.append({
+            "res": tr,
+            "size_bytes": sz,
+            "label": lbl,
+        })
 
     audio_high_label = f"🎵 کیفیت عالی · {to_persian_label(best_audio_size)}" if best_audio_size else "🎵 کیفیت عالی"
     audio_low_label = f"🎵 حجم کمتر · {to_persian_label(low_audio_size)}" if low_audio_size else "🎵 حجم کمتر"
 
     return {
-        "video_qualities": res_list,
+        "video_qualities": video_quals,
         "audio_high": {"label": audio_high_label, "size_bytes": best_audio_size},
         "audio_low": {"label": audio_low_label, "size_bytes": low_audio_size},
     }
@@ -693,17 +809,19 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
     clean_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
     proxy = os.environ.get("YOUTUBE_PROXY") or os.environ.get("HTTP_PROXY") or None
     yt_cookies = get_youtube_cookies_file()
+    node_bin = shutil.which("node")
 
-    # Attempt 1: Modern visionos/web with Node.js JS runtime
+    # Attempt 1: Modern yt-dlp format extraction
     try:
         ydl_opts_1: Dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
             "nocheckcertificate": True,
-            "socket_timeout": 20,
-            "js_runtimes": {"node": {}},
+            "socket_timeout": 30,
         }
+        if node_bin:
+            ydl_opts_1["js_runtimes"] = {"node": {"path": node_bin}}
         if yt_cookies:
             ydl_opts_1["cookiefile"] = yt_cookies
         if ff_dir:
@@ -716,11 +834,14 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
             vid = info.get("id") or video_id or ""
             title = info.get("title") or "YouTube Video"
             duration = info.get("duration") or 0
-            thumbnail = info.get("thumbnail") or ""
-            channel = info.get("uploader") or info.get("channel") or ""
+            thumbnail = info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+            channel = info.get("uploader") or info.get("channel") or "YouTube"
 
             parsed = parse_youtube_qualities(info)
-            available_res = [q["res"] for q in parsed["video_qualities"]] or [720, 480, 360]
+            if not info.get("formats"):
+                available_res = [720, 480, 360]
+            else:
+                available_res = [q["res"] for q in parsed["video_qualities"]] or [720, 480, 360]
 
             return {
                 "id": vid,
@@ -733,16 +854,16 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
                 "url": clean_url,
             }
     except Exception as e_node:
-        print(f"Visionos/Node extraction failed: {e_node}, attempting Android client...")
+        print(f"yt-dlp default extraction note: {e_node}")
 
-    # Attempt 2: Android client (works without JS runtime and bypasses datacenter web block)
+    # Attempt 2: Android client DASH
     try:
         ydl_opts_android: Dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
             "nocheckcertificate": True,
-            "socket_timeout": 20,
+            "socket_timeout": 30,
             "extractor_args": {"youtube": {"player_client": ["android"]}},
         }
         if ff_dir:
@@ -756,9 +877,12 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
             title = info.get("title") or "YouTube Video"
             duration = info.get("duration") or 0
             thumbnail = info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-            channel = info.get("uploader") or info.get("channel") or ""
+            channel = info.get("uploader") or info.get("channel") or "YouTube"
             parsed = parse_youtube_qualities(info)
-            available_res = [q["res"] for q in parsed["video_qualities"]] or [720, 480, 360]
+            if not info.get("formats"):
+                available_res = [720, 480, 360]
+            else:
+                available_res = [q["res"] for q in parsed["video_qualities"]] or [720, 480, 360]
             return {
                 "id": vid,
                 "title": title,
@@ -770,22 +894,28 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
                 "url": clean_url,
             }
     except Exception as e_android:
-        print(f"Android extraction failed: {e_android}, falling back to oEmbed...")
+        print(f"yt-dlp android extraction note: {e_android}")
 
-    # Attempt 3: Official YouTube oEmbed API (100% unblocked on all cloud/datacenter IPs)
+    # Attempt 3: Official YouTube oEmbed API fallback
     if video_id:
         try:
             oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
             r = requests.get(oembed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
             if r.status_code == 200:
                 data = r.json()
+                oe_title = data.get("title") or "YouTube Video"
+                oe_channel = data.get("author_name") or "YouTube"
+                oe_thumb = data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                duration = data.get("duration") or 0
+                parsed = parse_youtube_qualities({"duration": duration, "formats": []})
                 return {
                     "id": video_id,
-                    "title": data.get("title") or "YouTube Video",
-                    "duration": 0,
-                    "thumbnail": data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-                    "channel": data.get("author_name") or "YouTube",
+                    "title": oe_title,
+                    "duration": duration,
+                    "thumbnail": oe_thumb,
+                    "channel": oe_channel,
                     "resolutions": [720, 480, 360],
+                    "qualities_data": parsed,
                     "url": clean_url,
                 }
         except Exception as e_oembed:
@@ -810,8 +940,8 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
 
     fmt = "mp3" if quality in ("audio", "mp3") else (quality if quality in ["360", "480", "720", "1080"] else "720")
     target_url = f"https://www.youtube.com/watch?v={video_id}"
-    req_url = f"https://loader.to/ajax/download.php?button=1&start=1&end=1&format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
+    req_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"}
 
     success = False
     try:
@@ -819,7 +949,7 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
             progress_url = None
             raw_title = "YouTube Media"
             try:
-                async with session.get(req_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                async with session.get(req_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         if data.get("success"):
@@ -832,12 +962,12 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
             if not progress_url:
                 return None
 
-            # Poll progress endpoint (up to 40 seconds)
+            # Poll progress endpoint (up to 60 seconds)
             download_url = None
-            for _ in range(20):
+            for _ in range(30):
                 await asyncio.sleep(2)
                 try:
-                    async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=8)) as p_resp:
+                    async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=10)) as p_resp:
                         if p_resp.status == 200:
                             p_data = await p_resp.json()
                             if p_data.get("success") == 1 and p_data.get("download_url"):
@@ -858,7 +988,7 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
             out_file = os.path.join(task_dir, f"{clean_name}.{ext}")
 
             try:
-                async with session.get(download_url, timeout=aiohttp.ClientTimeout(total=90)) as dl_resp:
+                async with session.get(download_url, timeout=aiohttp.ClientTimeout(total=600, sock_read=60)) as dl_resp:
                     if dl_resp.status != 200:
                         return None
                     with open(out_file, "wb") as f:
@@ -868,31 +998,36 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
                 print(f"[Helper API] Stream download failed: {e}")
                 return None
 
-            if os.path.exists(out_file) and os.path.getsize(out_file) > 1024:
-                w, h, dur = get_media_dimensions(out_file)
+            if os.path.exists(out_file) and os.path.getsize(out_file) > 50000:
                 is_audio = quality in ("audio", "mp3")
-                success = True
-                return {
-                    "task_dir": task_dir,
-                    "file_path": out_file,
-                    "type": "audio" if is_audio else "video",
-                    "title": raw_title,
-                    "artist": "YouTube",
-                    "duration": dur or 0,
-                    "width": w,
-                    "height": h,
-                    "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-                    "is_audio": is_audio,
-                    "tier_used": 3,
-                    "download_url": download_url,
-                }
+                thumb_path = None
+                if not is_audio:
+                    out_file, thumb_path = prepare_video_for_streaming(out_file)
+                w, h, dur = get_media_dimensions(out_file)
+                if is_audio or (dur and dur > 0):
+                    success = True
+                    return {
+                        "task_dir": task_dir,
+                        "file_path": out_file,
+                        "thumbnail_path": thumb_path,
+                        "type": "audio" if is_audio else "video",
+                        "title": raw_title,
+                        "artist": "YouTube",
+                        "duration": dur or 0,
+                        "width": w or 0,
+                        "height": h or 0,
+                        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                        "is_audio": is_audio,
+                        "tier_used": 3,
+                        "download_url": download_url,
+                    }
             return None
     finally:
         if not success and created_task_dir and task_dir and os.path.exists(task_dir):
             cleanup_task_dir(task_dir)
 
 def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Synchronous Loader.to helper."""
+    """Synchronous Loader.to helper with integrity verification."""
     import time
     if not task_dir:
         task_id = str(uuid.uuid4())
@@ -904,13 +1039,13 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
 
     fmt = "mp3" if quality in ("audio", "mp3") else (quality if quality in ["360", "480", "720", "1080"] else "720")
     target_url = f"https://www.youtube.com/watch?v={video_id}"
-    req_url = f"https://loader.to/ajax/download.php?button=1&start=1&end=1&format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
+    req_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"}
 
     success = False
     try:
         try:
-            r = requests.get(req_url, headers=headers, timeout=10)
+            r = requests.get(req_url, headers=headers, timeout=15)
             if r.status_code != 200:
                 return None
             data = r.json()
@@ -926,10 +1061,10 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
             return None
 
         download_url = None
-        for _ in range(20):
+        for _ in range(30):
             time.sleep(2)
             try:
-                p_resp = requests.get(progress_url, headers=headers, timeout=8)
+                p_resp = requests.get(progress_url, headers=headers, timeout=10)
                 if p_resp.status_code == 200:
                     p_data = p_resp.json()
                     if p_data.get("success") == 1 and p_data.get("download_url"):
@@ -950,7 +1085,7 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
         out_file = os.path.join(task_dir, f"{clean_name}.{ext}")
 
         try:
-            with requests.get(download_url, headers=headers, stream=True, timeout=90) as stream_resp:
+            with requests.get(download_url, headers=headers, stream=True, timeout=(15, 600)) as stream_resp:
                 if stream_resp.status_code != 200:
                     return None
                 with open(out_file, "wb") as f:
@@ -961,24 +1096,29 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
             print(f"[Helper API] Sync stream download failed: {e}")
             return None
 
-        if os.path.exists(out_file) and os.path.getsize(out_file) > 1024:
-            w, h, dur = get_media_dimensions(out_file)
+        if os.path.exists(out_file) and os.path.getsize(out_file) > 50000:
             is_audio = quality in ("audio", "mp3")
-            success = True
-            return {
-                "task_dir": task_dir,
-                "file_path": out_file,
-                "type": "audio" if is_audio else "video",
-                "title": raw_title,
-                "artist": "YouTube",
-                "duration": dur or 0,
-                "width": w,
-                "height": h,
-                "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-                "is_audio": is_audio,
-                "tier_used": 3,
-                "download_url": download_url,
-            }
+            thumb_path = None
+            if not is_audio:
+                out_file, thumb_path = prepare_video_for_streaming(out_file)
+            w, h, dur = get_media_dimensions(out_file)
+            if is_audio or (dur and dur > 0):
+                success = True
+                return {
+                    "task_dir": task_dir,
+                    "file_path": out_file,
+                    "thumbnail_path": thumb_path,
+                    "type": "audio" if is_audio else "video",
+                    "title": raw_title,
+                    "artist": "YouTube",
+                    "duration": dur or 0,
+                    "width": w or 0,
+                    "height": h or 0,
+                    "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                    "is_audio": is_audio,
+                    "tier_used": 3,
+                    "download_url": download_url,
+                }
         return None
     finally:
         if not success and created_task_dir and task_dir and os.path.exists(task_dir):
@@ -1043,6 +1183,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
         proxy = os.environ.get("YOUTUBE_PROXY") or os.environ.get("HTTP_PROXY") or None
         yt_cookies = get_youtube_cookies_file()
+        node_bin = shutil.which("node")
 
         is_audio = quality in ("audio", "audio_low", "mp3")
         media_type = "audio" if is_audio else "video"
@@ -1055,10 +1196,10 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         channel = ""
         tier_used = 0
 
-        # Tier 1: High-resolution download via visionos/web with Node.js JS solver
+        # Tier 1: Modern yt-dlp DASH download with Node JS runtime if available
         try:
             if is_audio:
-                ydl_opts_1 = {
+                ydl_opts_1: Dict[str, Any] = {
                     "format": "ba/b",
                     "outtmpl": outtmpl,
                     "postprocessors": [{
@@ -1074,17 +1215,15 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     "quiet": True,
                     "no_warnings": True,
                     "nocheckcertificate": True,
-                    "socket_timeout": 35,
-                    "js_runtimes": {"node": {}},
+                    "socket_timeout": 45,
                 }
             else:
                 fmt_1 = (
-                    f"bv*[height<={q_int}][vcodec^=avc]+ba[acodec^=mp4a]/"
-                    f"bv*[height<={q_int}][vcodec^=avc]+ba/"
                     f"bv*[height<={q_int}][ext=mp4]+ba[ext=m4a]/"
-                    f"b[height<={q_int}][vcodec^=avc]/"
-                    f"b[height<={q_int}][ext=mp4]/"
-                    f"18/best"
+                    f"bv*[height<={q_int}][vcodec^=avc]+ba[acodec^=mp4a]/"
+                    f"bv*[height<={q_int}]+ba/"
+                    f"b[height<={q_int}]/"
+                    f"best"
                 )
                 ydl_opts_1 = {
                     "format": fmt_1,
@@ -1099,10 +1238,11 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     "quiet": True,
                     "no_warnings": True,
                     "nocheckcertificate": True,
-                    "socket_timeout": 35,
-                    "js_runtimes": {"node": {}},
+                    "socket_timeout": 45,
                 }
 
+            if node_bin:
+                ydl_opts_1["js_runtimes"] = {"node": {"path": node_bin}}
             if yt_cookies:
                 ydl_opts_1["cookiefile"] = yt_cookies
             if ff_dir:
@@ -1118,13 +1258,13 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                 downloaded = True
                 tier_used = 1
         except Exception as e1:
-            print(f"[YouTube DL] Strategy 1 (visionos/node) note: {e1}, failing over to Strategy 2 (android)...")
+            print(f"[YouTube DL] Strategy 1 note: {e1}, failing over to Strategy 2 (android)...")
 
-        # Tier 2: Bulletproof Android client DASH (bypasses datacenter web bot guard)
+        # Tier 2: Android client DASH (bypasses datacenter web bot guard)
         if not downloaded:
             try:
                 if is_audio:
-                    ydl_opts_2 = {
+                    ydl_opts_2: Dict[str, Any] = {
                         "format": "ba/b/18/best",
                         "outtmpl": outtmpl,
                         "postprocessors": [{
@@ -1140,16 +1280,15 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                         "quiet": True,
                         "no_warnings": True,
                         "nocheckcertificate": True,
-                        "socket_timeout": 35,
+                        "socket_timeout": 45,
                         "extractor_args": {"youtube": {"player_client": ["android"]}},
                     }
                 else:
                     fmt_2 = (
-                        f"bv*[height<={q_int}][vcodec^=avc]+ba[acodec^=mp4a]/"
-                        f"bv*[height<={q_int}][vcodec^=avc]+ba/"
                         f"bv*[height<={q_int}][ext=mp4]+ba[ext=m4a]/"
-                        f"b[height<={q_int}][vcodec^=avc]/"
-                        f"b[height<={q_int}][ext=mp4]/"
+                        f"bv*[height<={q_int}][vcodec^=avc]+ba[acodec^=mp4a]/"
+                        f"bv*[height<={q_int}]+ba/"
+                        f"b[height<={q_int}]/"
                         f"18/best"
                     )
                     ydl_opts_2 = {
@@ -1165,7 +1304,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                         "quiet": True,
                         "no_warnings": True,
                         "nocheckcertificate": True,
-                        "socket_timeout": 35,
+                        "socket_timeout": 45,
                         "extractor_args": {"youtube": {"player_client": ["android"]}},
                     }
                 if ff_dir:
@@ -1185,22 +1324,25 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
 
         files = [
             f for f in glob.glob(os.path.join(task_dir, "*"))
-            if os.path.isfile(f) and not f.endswith(".part") and not f.endswith(".ytdl")
+            if not f.endswith(".part") and not f.endswith(".ytdl") and not f.endswith(".jpg")
         ]
         if not files:
-            # Tier 3 Fallback: Unblocked external Loader.to / SaveNow REST helper
-            print(f"[YouTube DL] Local strategies 1 & 2 failed or blocked on datacenter IP. Calling Tier 3 (External Helper)...")
+            # Tier 3 Fallback: Loader.to API
+            print("[YouTube DL] Local strategies failed. Calling Tier 3 (External Helper)...")
             try:
                 helper_res = download_youtube_via_helper_sync(video_id, quality, task_dir=task_dir)
                 if helper_res and helper_res.get("file_path") and os.path.exists(helper_res["file_path"]):
-                    success = True
-                    return helper_res
+                    h_file = helper_res["file_path"]
+                    w_h, h_h, dur_h = get_media_dimensions(h_file)
+                    if is_audio or (dur_h and dur_h > 0):
+                        success = True
+                        return helper_res
             except Exception as e3:
                 print(f"[YouTube DL] Tier 3 helper error: {e3}")
 
         files = [
             f for f in glob.glob(os.path.join(task_dir, "*"))
-            if os.path.isfile(f) and not f.endswith(".part") and not f.endswith(".ytdl")
+            if os.path.isfile(f) and not f.endswith(".part") and not f.endswith(".ytdl") and not f.endswith(".jpg")
         ]
         if not files:
             raise ValueError("دانلود فایل از یوتیوب ناموفق بود.")
@@ -1209,7 +1351,17 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         thumb_path = None
         if not is_audio:
             file_path, thumb_path = prepare_video_for_streaming(file_path)
+
         w, h, dur = get_media_dimensions(file_path)
+        final_dur = dur or duration
+
+        # Fallback to ffmpeg probe if duration is 0
+        if not is_audio and (not final_dur or final_dur <= 0):
+            w_ff, h_ff, dur_ff = probe_with_ffmpeg(file_path)
+            if dur_ff > 0:
+                final_dur = dur_ff
+                w = w or w_ff
+                h = h or h_ff
 
         success = True
         return {
@@ -1219,9 +1371,9 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
             "type": media_type,
             "title": title,
             "artist": channel,
-            "duration": dur or duration,
-            "width": w,
-            "height": h,
+            "duration": final_dur or 0,
+            "width": w or 0,
+            "height": h or 0,
             "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
             "is_audio": is_audio,
             "tier_used": tier_used,
