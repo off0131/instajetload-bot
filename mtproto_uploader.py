@@ -79,8 +79,7 @@ async def send_mtproto_video(
                 w=w,
                 h=h,
                 supports_streaming=True,
-            ),
-            DocumentAttributeFilename(file_name=filename),
+            )
         ]
 
         thumb_path = thumb if (thumb and os.path.exists(thumb)) else None
@@ -90,8 +89,10 @@ async def send_mtproto_video(
             file=file_path,
             caption=caption,
             thumb=thumb_path,
-            attributes=attrs,
+            force_document=False,
             supports_streaming=True,
+            mime_type="video/mp4",
+            attributes=attrs,
             progress_callback=progress_callback,
         )
         return True

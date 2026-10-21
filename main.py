@@ -654,16 +654,43 @@ async def process_youtube_url(message: types.Message, url: str):
             resolutions = info.get("resolutions") or [720, 480, 360]
 
             # Build inline keyboard for quality selection
-            quality_buttons = []
-            row = []
-            for r in resolutions[:4]:
-                row.append(InlineKeyboardButton(text=f"🎬 {r}p", callback_data=f"yt:{video_id}:{r}"))
-            if row:
-                quality_buttons.append(row)
+            qualities_data = info.get("qualities_data") or {}
+            v_quals = qualities_data.get("video_qualities") or []
 
-            quality_buttons.append([
-                InlineKeyboardButton(text=get_text("yt_audio_btn", lang), callback_data=f"yt:{video_id}:audio")
-            ])
+            quality_buttons = []
+            if v_quals:
+                curr_row = []
+                for q in v_quals:
+                    r = q["res"]
+                    lbl = q["label"]
+                    curr_row.append(InlineKeyboardButton(text=lbl, callback_data=f"yt:{video_id}:{r}"))
+                    if len(curr_row) == 2:
+                        quality_buttons.append(curr_row)
+                        curr_row = []
+                if curr_row:
+                    quality_buttons.append(curr_row)
+
+                audio_high = qualities_data.get("audio_high", {})
+                audio_low = qualities_data.get("audio_low", {})
+                audio_row = [
+                    InlineKeyboardButton(text=audio_high.get("label", "🎵 کیفیت عالی"), callback_data=f"yt:{video_id}:audio"),
+                    InlineKeyboardButton(text=audio_low.get("label", "🎵 حجم کمتر"), callback_data=f"yt:{video_id}:audio_low")
+                ]
+                quality_buttons.append(audio_row)
+            else:
+                row = []
+                for r in resolutions:
+                    row.append(InlineKeyboardButton(text=f"🎬 {r}p", callback_data=f"yt:{video_id}:{r}"))
+                    if len(row) == 2:
+                        quality_buttons.append(row)
+                        row = []
+                if row:
+                    quality_buttons.append(row)
+
+                quality_buttons.append([
+                    InlineKeyboardButton(text=get_text("yt_audio_btn", lang), callback_data=f"yt:{video_id}:audio")
+                ])
+
             quality_buttons.append([
                 InlineKeyboardButton(text=get_text("btn_cancel", lang), callback_data="yt:cancel")
             ])
@@ -708,10 +735,11 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
 
     user_id = callback.from_user.id if callback.from_user else 0
     lang = await get_user_lang(user_id)
-    quality_label = get_text("yt_audio_btn", lang) if quality == "audio" else f"{quality}p"
+    is_audio = quality in ("audio", "audio_low", "mp3")
+    quality_label = "صوتی (حجم کمتر)" if quality == "audio_low" else (get_text("yt_audio_btn", lang) if is_audio else f"{quality}p")
     status_msg = await callback.message.reply(get_text("yt_downloading", lang, quality=quality_label))
 
-    chat_action = ChatAction.RECORD_VOICE if quality == "audio" else ChatAction.UPLOAD_VIDEO
+    chat_action = ChatAction.RECORD_VOICE if is_audio else ChatAction.UPLOAD_VIDEO
     async with keep_chat_action(bot, callback.message.chat.id, chat_action):
         cache_key = f"yt_{video_id}_{quality}"
         # 1. Check database cache
@@ -723,7 +751,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                     caption_text = truncate_caption(cached.get("caption", ""))
                     item = media_items[0] if isinstance(media_items[0], dict) else {"file_id": media_items[0]}
                     f_id = item.get("file_id")
-                    if quality == "audio":
+                    if is_audio:
                         await safe_reply_audio(
                             callback.message,
                             audio=f_id,
@@ -755,16 +783,19 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 res = await download_youtube(video_id, quality)
             task_dir = res.get("task_dir")
             file_path = res.get("file_path")
+            thumb_file = res.get("thumbnail_path")
+            if not thumb_file or not os.path.exists(thumb_file):
+                thumb_file = None
 
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
-            formatted_caption = format_caption(f"🎵 {res.get('title', '')}" if quality == "audio" else res.get("title", ""))
+            formatted_caption = format_caption(f"🎵 {res.get('title', '')}" if is_audio else res.get("title", ""))
 
             if file_size_mb > 49.5:
                 # MTProto direct delivery up to 2,000 MB (2 GB)
                 if file_size_mb <= 2000.0:
                     try:
                         logger.info(f"Delivering large YouTube media directly via MTProto ({file_size_mb:.1f} MB)")
-                        if quality == "audio":
+                        if is_audio:
                             sent_ok = await send_mtproto_audio(
                                 chat_id=callback.message.chat.id,
                                 file_path=file_path,
@@ -781,7 +812,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                                 duration=res.get("duration") or 0,
                                 width=res.get("width") or 0,
                                 height=res.get("height") or 0,
-                                thumb=res.get("thumbnail"),
+                                thumb=thumb_file,
                             )
                         if sent_ok:
                             if callback.from_user:
@@ -795,7 +826,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 token = secrets.token_urlsafe(16)
                 filename = os.path.basename(file_path)
                 title = res.get("title", "YouTube Media")
-                q_label = "صوتی (MP3)" if quality in ("audio", "mp3") else f"{quality}p"
+                q_label = "صوتی (MP3)" if is_audio else f"{quality}p"
 
                 DIRECT_DOWNLOADS[token] = {
                     "file_path": file_path,
@@ -811,7 +842,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
 
                 server_url = get_server_base_url()
                 page_url = f"{server_url}/dl/{token}"
-                safe_ext = "mp3" if quality in ("audio", "mp3") else "mp4"
+                safe_ext = "mp3" if is_audio else "mp4"
                 stream_url = f"{server_url}/file/{token}/video.{safe_ext}"
 
                 msg_text = (
@@ -832,7 +863,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
 
                 await status_msg.edit_text(msg_text, reply_markup=reply_markup)
                 return
-            if quality == "audio":
+            if is_audio:
                 sent = await safe_reply_audio(
                     callback.message,
                     audio=FSInputFile(file_path),
@@ -850,6 +881,8 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                     }], formatted_caption)
             else:
                 v_kwargs = {"supports_streaming": True}
+                if thumb_file and os.path.exists(thumb_file):
+                    v_kwargs["thumbnail"] = FSInputFile(thumb_file)
                 if res.get("width") and res.get("width") > 0:
                     v_kwargs["width"] = res.get("width")
                 if res.get("height") and res.get("height") > 0:

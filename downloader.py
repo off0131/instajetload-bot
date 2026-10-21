@@ -560,6 +560,51 @@ def cleanup_task_dir(task_dir: str):
     except Exception as e:
         print(f"Error cleaning task dir {task_dir}: {e}")
 
+def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
+    """
+    Ensures instant Telegram streaming and live preview:
+    1. Extracts a 1st-second JPEG frame for the Telegram video player cover.
+    2. Moves MP4 moov atom to byte 0 (+faststart) using zero-reencode fast copy.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return file_path, None
+
+    ff_dir = get_ffmpeg_dir()
+    ff_bin = shutil.which("ffmpeg", path=ff_dir) or shutil.which("ffmpeg") or "ffmpeg"
+
+    task_dir = os.path.dirname(file_path)
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    thumb_path = os.path.join(task_dir, f"{base_name}_thumb.jpg")
+
+    # 1. Generate thumbnail frame
+    try:
+        subprocess.run(
+            [ff_bin, "-y", "-ss", "00:00:01", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except Exception as e:
+        print(f"Thumbnail extraction failed: {e}")
+
+    # 2. Faststart moov atom to beginning of MP4
+    if file_path.endswith(".mp4"):
+        fast_path = os.path.join(task_dir, f"{base_name}_fast.mp4")
+        try:
+            res = subprocess.run(
+                [ff_bin, "-y", "-i", file_path, "-c", "copy", "-movflags", "+faststart", fast_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=60,
+            )
+            if res.returncode == 0 and os.path.exists(fast_path) and os.path.getsize(fast_path) > 1024:
+                os.replace(fast_path, file_path)
+        except Exception as e:
+            print(f"Faststart optimization failed: {e}")
+
+    real_thumb = thumb_path if (os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0) else None
+    return file_path, real_thumb
+
 # ================= MULTI-PLATFORM DOWNLOADERS =================
 
 # YouTube client configurations to bypass datacenter IP blocks (e.g. Render, AWS, GCP)
@@ -568,6 +613,79 @@ YT_EXTRACTOR_ARGS = {
         "player_client": ["android"]
     }
 }
+
+def parse_youtube_qualities(info: Dict[str, Any]) -> Dict[str, Any]:
+    """Extracts available resolutions with exact pre-calculated file sizes formatted in Persian."""
+    duration = info.get("duration") or 0
+    formats = info.get("formats", []) or []
+
+    best_audio_size = 0
+    low_audio_size = 0
+    audio_formats = [f for f in formats if f.get("vcodec") == "none" and f.get("acodec") != "none"]
+    for f in audio_formats:
+        s = f.get("filesize") or f.get("filesize_approx") or 0
+        abr = f.get("abr") or 0
+        if s > best_audio_size:
+            best_audio_size = s
+        if abr and abr <= 130 and (low_audio_size == 0 or s < low_audio_size):
+            low_audio_size = s
+
+    if not best_audio_size and duration:
+        best_audio_size = int(duration * 192 * 1024 / 8)
+    if not low_audio_size and duration:
+        low_audio_size = int(duration * 128 * 1024 / 8)
+
+    target_resolutions = [1080, 720, 480, 360, 240, 144]
+    heights = {f.get("height") for f in formats if f.get("height") and f.get("vcodec") != "none"}
+    available_targets = [tr for tr in target_resolutions if any(vh >= tr for vh in heights)] if heights else [720, 480, 360]
+
+    res_map = {}
+    for tr in available_targets:
+        # Check if exact format matches
+        matching_v = [f for f in formats if f.get("height") == tr and f.get("vcodec") != "none"]
+        if matching_v:
+            v_size = matching_v[0].get("filesize") or matching_v[0].get("filesize_approx") or 0
+        else:
+            v_size = 0
+
+        if not v_size and duration:
+            tbr_estimate = tr * 2.2 if tr >= 720 else tr * 1.5
+            v_size = int(duration * tbr_estimate * 1024 / 8)
+
+        total_sz = v_size + best_audio_size
+        res_map[tr] = total_sz
+
+    def to_persian_label(bytes_val: int) -> str:
+        if not bytes_val or bytes_val <= 0:
+            return ""
+        mb = bytes_val / (1024 * 1024)
+        if mb >= 1000:
+            val_str = f"{mb / 1024:.1f}"
+            unit = "گیگ"
+        else:
+            val_str = f"{int(round(mb))}"
+            unit = "مگ"
+        fa_digits = str.maketrans("0123456789.", "۰۱۲۳۴۵۶۷۸۹٫")
+        return f"{val_str.translate(fa_digits)} {unit}"
+
+    res_list = []
+    for tr in target_resolutions:
+        if tr in res_map:
+            sz = res_map[tr]
+            res_list.append({
+                "res": tr,
+                "size_bytes": sz,
+                "label": f"{tr}p · {to_persian_label(sz)}" if sz else f"{tr}p"
+            })
+
+    audio_high_label = f"🎵 کیفیت عالی · {to_persian_label(best_audio_size)}" if best_audio_size else "🎵 کیفیت عالی"
+    audio_low_label = f"🎵 حجم کمتر · {to_persian_label(low_audio_size)}" if low_audio_size else "🎵 حجم کمتر"
+
+    return {
+        "video_qualities": res_list,
+        "audio_high": {"label": audio_high_label, "size_bytes": best_audio_size},
+        "audio_low": {"label": audio_low_label, "size_bytes": low_audio_size},
+    }
 
 def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
     ff_dir = get_ffmpeg_dir()
@@ -601,16 +719,8 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
             thumbnail = info.get("thumbnail") or ""
             channel = info.get("uploader") or info.get("channel") or ""
 
-            heights = set()
-            for f in info.get("formats", []):
-                h = f.get("height")
-                if h and f.get("vcodec") != "none":
-                    heights.add(h)
-
-            common_resolutions = [1080, 720, 480, 360]
-            available_res = [h for h in common_resolutions if any(vh >= h for vh in heights)]
-            if not available_res:
-                available_res = [720, 480, 360]
+            parsed = parse_youtube_qualities(info)
+            available_res = [q["res"] for q in parsed["video_qualities"]] or [720, 480, 360]
 
             return {
                 "id": vid,
@@ -619,6 +729,7 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
                 "thumbnail": thumbnail,
                 "channel": channel,
                 "resolutions": available_res,
+                "qualities_data": parsed,
                 "url": clean_url,
             }
     except Exception as e_node:
@@ -646,13 +757,16 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
             duration = info.get("duration") or 0
             thumbnail = info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
             channel = info.get("uploader") or info.get("channel") or ""
+            parsed = parse_youtube_qualities(info)
+            available_res = [q["res"] for q in parsed["video_qualities"]] or [720, 480, 360]
             return {
                 "id": vid,
                 "title": title,
                 "duration": duration,
                 "thumbnail": thumbnail,
                 "channel": channel,
-                "resolutions": [720, 480, 360],
+                "resolutions": available_res,
+                "qualities_data": parsed,
                 "url": clean_url,
             }
     except Exception as e_android:
@@ -930,9 +1044,10 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         proxy = os.environ.get("YOUTUBE_PROXY") or os.environ.get("HTTP_PROXY") or None
         yt_cookies = get_youtube_cookies_file()
 
-        is_audio = quality in ("audio", "mp3")
+        is_audio = quality in ("audio", "audio_low", "mp3")
         media_type = "audio" if is_audio else "video"
         q_int = int(quality) if quality.isdigit() else 720
+        audio_bitrate = "128" if quality == "audio_low" else "192"
 
         downloaded = False
         title = "YouTube Video"
@@ -949,10 +1064,13 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     "postprocessors": [{
                         "key": "FFmpegExtractAudio",
                         "preferredcodec": "mp3",
-                        "preferredquality": "192",
+                        "preferredquality": audio_bitrate,
                     }],
                     "retries": 5,
                     "fragment_retries": 5,
+                    "concurrent_fragment_downloads": 8,
+                    "buffersize": 1048576,
+                    "http_chunk_size": 10485760,
                     "quiet": True,
                     "no_warnings": True,
                     "nocheckcertificate": True,
@@ -975,6 +1093,9 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart"]},
                     "retries": 5,
                     "fragment_retries": 5,
+                    "concurrent_fragment_downloads": 8,
+                    "buffersize": 1048576,
+                    "http_chunk_size": 10485760,
                     "quiet": True,
                     "no_warnings": True,
                     "nocheckcertificate": True,
@@ -1009,10 +1130,13 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                         "postprocessors": [{
                             "key": "FFmpegExtractAudio",
                             "preferredcodec": "mp3",
-                            "preferredquality": "192",
+                            "preferredquality": audio_bitrate,
                         }],
                         "retries": 5,
                         "fragment_retries": 5,
+                        "concurrent_fragment_downloads": 8,
+                        "buffersize": 1048576,
+                        "http_chunk_size": 10485760,
                         "quiet": True,
                         "no_warnings": True,
                         "nocheckcertificate": True,
@@ -1035,6 +1159,9 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                         "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart"]},
                         "retries": 5,
                         "fragment_retries": 5,
+                        "concurrent_fragment_downloads": 8,
+                        "buffersize": 1048576,
+                        "http_chunk_size": 10485760,
                         "quiet": True,
                         "no_warnings": True,
                         "nocheckcertificate": True,
@@ -1079,12 +1206,16 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
             raise ValueError("دانلود فایل از یوتیوب ناموفق بود.")
 
         file_path = files[0]
+        thumb_path = None
+        if not is_audio:
+            file_path, thumb_path = prepare_video_for_streaming(file_path)
         w, h, dur = get_media_dimensions(file_path)
 
         success = True
         return {
             "task_dir": task_dir,
             "file_path": file_path,
+            "thumbnail_path": thumb_path,
             "type": media_type,
             "title": title,
             "artist": channel,
