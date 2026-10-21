@@ -53,6 +53,7 @@ from downloader import (
     download_generic,
     get_youtube_direct_cdn_url,
 )
+from mtproto_uploader import send_mtproto_video, send_mtproto_audio
 
 # Load environment variables
 load_dotenv()
@@ -756,8 +757,41 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
             file_path = res.get("file_path")
 
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
+            formatted_caption = format_caption(f"🎵 {res.get('title', '')}" if quality == "audio" else res.get("title", ""))
+
             if file_size_mb > 49.5:
-                # Register direct streaming token on our web server
+                # MTProto direct delivery up to 2,000 MB (2 GB)
+                if file_size_mb <= 2000.0:
+                    try:
+                        logger.info(f"Delivering large YouTube media directly via MTProto ({file_size_mb:.1f} MB)")
+                        if quality == "audio":
+                            sent_ok = await send_mtproto_audio(
+                                chat_id=callback.message.chat.id,
+                                file_path=file_path,
+                                caption=formatted_caption,
+                                title=res.get("title", "YouTube Audio"),
+                                performer=res.get("artist") or "YouTube",
+                                duration=res.get("duration") or 0,
+                            )
+                        else:
+                            sent_ok = await send_mtproto_video(
+                                chat_id=callback.message.chat.id,
+                                file_path=file_path,
+                                caption=formatted_caption,
+                                duration=res.get("duration") or 0,
+                                width=res.get("width") or 0,
+                                height=res.get("height") or 0,
+                                thumb=res.get("thumbnail"),
+                            )
+                        if sent_ok:
+                            if callback.from_user:
+                                await log_download(callback.from_user.id, cache_key)
+                            await status_msg.delete()
+                            return
+                    except Exception as e_mt:
+                        logger.error(f"MTProto direct upload failed: {e_mt}", exc_info=True)
+
+                # Fallback to direct web link if > 2GB or if MTProto encountered an error
                 token = secrets.token_urlsafe(16)
                 filename = os.path.basename(file_path)
                 title = res.get("title", "YouTube Media")
@@ -781,11 +815,10 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 stream_url = f"{server_url}/file/{token}/video.{safe_ext}"
 
                 msg_text = (
-                    f"⚠️ <b>حجم فایل بیش از سقف ارسال مستقیم در تلگرام است ({file_size_mb:.1f} MB)</b>\n\n"
+                    f"⚠️ <b>حجم فایل بیش از سقف ۲ گیگابایت است ({file_size_mb:.1f} MB)</b>\n\n"
                     f"🎬 <b>عنوان:</b> {title}\n"
                     f"📊 <b>کیفیت انتخابی:</b> {q_label}\n"
                     f"💾 <b>حجم دقیق:</b> {file_size_mb:.1f} مگابایت\n\n"
-                    "📌 طبق قوانین رسمی تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت امکان ارسال مستقیم در چت را ندارند.\n\n"
                     "🚀 <b>روش‌های دریافت فایل کامل با نهایت سرعت:</b>\n"
                     "۱️⃣ <b>کلیک روی دکمه‌های زیر</b> جهت ورود به صفحه اختصاصی دانلود و تماشای آنلاین\n"
                     "۲️⃣ <b>یا لمس و کپی کردن لینک زیر</b> (با یک‌بار لمس متن زیر کپی می‌شود) و قرار دادن آن در مرورگر Chrome یا برنامه‌های دانلود منیجر (مانند ADM یا IDM):\n\n"
@@ -799,8 +832,6 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
 
                 await status_msg.edit_text(msg_text, reply_markup=reply_markup)
                 return
-
-            formatted_caption = format_caption(f"🎵 {res.get('title', '')}" if quality == "audio" else res.get("title", ""))
             if quality == "audio":
                 sent = await safe_reply_audio(
                     callback.message,
@@ -955,14 +986,33 @@ async def process_spotify_url(message: types.Message, url: str):
             task_dir = res.get("task_dir")
             file_path = res.get("file_path")
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if file_path and os.path.exists(file_path) else 0
+            caption = format_caption(f"🎵 {res.get('title', '')}\n👤 {res.get('artist', '')}")
+
             if file_size_mb > 49.5:
+                if file_size_mb <= 2000.0:
+                    try:
+                        logger.info(f"Delivering large Spotify audio directly via MTProto ({file_size_mb:.1f} MB)")
+                        sent_ok = await send_mtproto_audio(
+                            chat_id=message.chat.id,
+                            file_path=file_path,
+                            caption=caption,
+                            title=res.get("title", "Spotify Track"),
+                            performer=res.get("artist") or "Spotify",
+                            duration=res.get("duration") or 0,
+                        )
+                        if sent_ok:
+                            if message.from_user:
+                                await log_download(message.from_user.id, cache_key or "spotify")
+                            await status_msg.delete()
+                            return
+                    except Exception as e_mt:
+                        logger.error(f"MTProto Spotify upload error: {e_mt}", exc_info=True)
+
                 await status_msg.edit_text(
-                    f"⚠️ <b>حجم فایل صوتی بیش از حد مجاز تلگرام است ({file_size_mb:.1f} MB):</b>\n\n"
-                    "به دلیل محدودیت ربات‌های تلگرام، فایل‌های بزرگتر از ۵۰ مگابایت قابل ارسال نیستند 🔄"
+                    f"⚠️ <b>حجم فایل صوتی بیش از حد مجاز ۲ گیگابایت است ({file_size_mb:.1f} MB):</b>\n\n"
+                    "امکان ارسال فایل‌های بزرگتر از ۲ گیگابایت در تلگرام وجود ندارد 🔄"
                 )
                 return
-
-            caption = format_caption(f"🎵 {res.get('title', '')}\n👤 {res.get('artist', '')}")
             sent = await safe_reply_audio(
                 message,
                 audio=FSInputFile(file_path),
@@ -1010,6 +1060,37 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
                 res = await download_generic(url, platform)
             task_dir = res.get("task_dir")
             m_type = res.get("type")
+            file_path = res.get("file_path", "")
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
+
+            if file_size_mb > 49.5 and file_size_mb <= 2000.0:
+                try:
+                    logger.info(f"Delivering large generic media directly via MTProto ({file_size_mb:.1f} MB)")
+                    if m_type == "audio":
+                        sent_ok = await send_mtproto_audio(
+                            chat_id=message.chat.id,
+                            file_path=file_path,
+                            caption=format_caption(f"🎵 {res.get('title', '')}"),
+                            title=res.get("title", "Audio"),
+                            performer=res.get("artist") or p_name,
+                            duration=res.get("duration") or 0,
+                        )
+                    else:
+                        sent_ok = await send_mtproto_video(
+                            chat_id=message.chat.id,
+                            file_path=file_path,
+                            caption=format_caption(res.get("title", "")),
+                            duration=res.get("duration") or 0,
+                            width=res.get("width") or 0,
+                            height=res.get("height") or 0,
+                        )
+                    if sent_ok:
+                        if message.from_user:
+                            await log_download(message.from_user.id, platform)
+                        await status_msg.delete()
+                        return
+                except Exception as e_gen_mt:
+                    logger.error(f"Generic MTProto upload error: {e_gen_mt}", exc_info=True)
 
             if m_type == "audio":
                 await safe_reply_audio(

@@ -9,3 +9,5 @@ cookies*.txt
 *.db
 *.zip
 gallery-dl/
+session/
+*.session
