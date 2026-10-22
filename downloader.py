@@ -1086,11 +1086,17 @@ def download_via_cobalt_sync(
                     if data.get("status") in ("tunnel", "redirect") and data.get("url"):
                         stream_url = data["url"]
                         raw_filename = data.get("filename") or raw_filename
+                        print(f"[Cobalt API] Stream tunnel obtained from {instance}")
                         break
+                    else:
+                        print(f"[Cobalt API] {instance} returned non-tunnel: {data.get('status')} {data.get('error')}")
+                else:
+                    print(f"[Cobalt API] {instance} returned HTTP {r.status_code}: {r.text[:100]}")
             except Exception as e_inst:
                 print(f"[Cobalt API] Instance {instance} error: {e_inst}")
 
         if not stream_url:
+            print("[Cobalt API] No active instance returned a stream tunnel")
             return None
 
         chosen_title = title or raw_filename
@@ -1104,6 +1110,7 @@ def download_via_cobalt_sync(
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         }
         with requests.get(stream_url, headers=dl_headers, stream=True, timeout=(15, 300)) as resp:
+            print(f"[Cobalt Stream] HTTP {resp.status_code}, content-length={resp.headers.get('Content-Length')}, estimated={resp.headers.get('estimated-content-length')}")
             if resp.status_code != 200:
                 if os.path.exists(out_file):
                     try:
@@ -1117,7 +1124,9 @@ def download_via_cobalt_sync(
                         f.write(chunk)
 
         file_sz = os.path.getsize(out_file) if os.path.exists(out_file) else 0
+        print(f"[Cobalt Stream] Download finished, file size on disk: {file_sz} bytes")
         if file_sz < 10000:
+            print(f"[Cobalt Stream] File too small ({file_sz} bytes), discarding and triggering fallback")
             if os.path.exists(out_file):
                 try:
                     os.remove(out_file)
@@ -1198,37 +1207,48 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
             raw_title = "YouTube Media"
             try:
                 async with session.get(req_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    print(f"[Helper API] Init HTTP {resp.status}")
                     if resp.status == 200:
-                        data = await resp.json()
+                        data = await resp.json(content_type=None)
                         if data.get("success"):
                             progress_url = data.get("progress_url")
                             raw_title = data.get("title") or "YouTube Media"
+                            print(f"[Helper API] Progress URL obtained: {progress_url}")
+                        else:
+                            print(f"[Helper API] Init returned success=False: {data}")
+                    else:
+                        print(f"[Helper API] Init returned non-200 status: {resp.status}")
             except Exception as e:
-                print(f"[Helper API] Init failed: {e}")
+                print(f"[Helper API] Init request failed: {e}")
                 return None
 
             if not progress_url:
+                print("[Helper API] No progress_url available, aborting helper")
                 return None
 
-            # Poll progress endpoint (up to 60 seconds)
+            # Poll progress endpoint (up to 90 seconds)
             download_url = None
-            for _ in range(30):
+            for idx in range(45):
                 await asyncio.sleep(2)
                 try:
                     async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=10)) as p_resp:
                         if p_resp.status == 200:
-                            p_data = await p_resp.json()
+                            p_data = await p_resp.json(content_type=None)
                             if p_data.get("success") == 1 and p_data.get("download_url"):
                                 download_url = p_data.get("download_url")
                                 if p_data.get("title"):
                                     raw_title = p_data.get("title")
+                                print(f"[Helper API] Direct download URL ready on attempt {idx}!")
                                 break
                             elif p_data.get("success") == -1:
+                                print(f"[Helper API] Progress returned -1 (error): {p_data}")
                                 return None
-                except Exception:
-                    pass
+                except Exception as e_poll:
+                    if idx % 5 == 0:
+                        print(f"[Helper API] Polling attempt {idx} warning: {e_poll}")
 
             if not download_url:
+                print("[Helper API] Polling timed out without download_url")
                 return None
 
             ext = "mp3" if is_audio else "mp4"
@@ -1236,7 +1256,9 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
             out_file = os.path.join(task_dir, f"{clean_name}.{ext}")
 
             try:
+                print(f"[Helper API] Starting stream download into {out_file}...")
                 async with session.get(download_url, timeout=aiohttp.ClientTimeout(total=1800, sock_read=60)) as dl_resp:
+                    print(f"[Helper API] Stream response HTTP {dl_resp.status}, length: {dl_resp.headers.get('Content-Length')}")
                     if dl_resp.status != 200:
                         if os.path.exists(out_file):
                             try:
@@ -1247,6 +1269,7 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
                     with open(out_file, "wb") as f:
                         while chunk := await dl_resp.content.read(131072):
                             f.write(chunk)
+                print(f"[Helper API] Stream download completed. Size on disk: {os.path.getsize(out_file)} bytes")
             except Exception as e:
                 print(f"[Helper API] Stream download failed: {e}")
                 if os.path.exists(out_file):
@@ -1317,22 +1340,27 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
     try:
         try:
             r = requests.get(req_url, headers=headers, timeout=15)
+            print(f"[Helper API Sync] Init HTTP {r.status_code}")
             if r.status_code != 200:
+                print(f"[Helper API Sync] Non-200 body: {r.text[:150]}")
                 return None
             data = r.json()
             if not data.get("success"):
+                print(f"[Helper API Sync] Init success=False: {data}")
                 return None
             progress_url = data.get("progress_url")
             raw_title = data.get("title") or "YouTube Media"
+            print(f"[Helper API Sync] Progress URL: {progress_url}")
         except Exception as e:
-            print(f"[Helper API] Sync init failed: {e}")
+            print(f"[Helper API Sync] Init failed: {e}")
             return None
 
         if not progress_url:
+            print("[Helper API Sync] No progress_url obtained")
             return None
 
         download_url = None
-        for _ in range(30):
+        for idx in range(45):
             time.sleep(2)
             try:
                 p_resp = requests.get(progress_url, headers=headers, timeout=10)
@@ -1342,13 +1370,17 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
                         download_url = p_data.get("download_url")
                         if p_data.get("title"):
                             raw_title = p_data.get("title")
+                        print(f"[Helper API Sync] Ready at attempt {idx}!")
                         break
                     elif p_data.get("success") == -1:
+                        print(f"[Helper API Sync] Progress returned -1: {p_data}")
                         return None
-            except Exception:
-                pass
+            except Exception as e_poll:
+                if idx % 5 == 0:
+                    print(f"[Helper API Sync] Poll attempt {idx} warning: {e_poll}")
 
         if not download_url:
+            print("[Helper API Sync] Polling timed out without download_url")
             return None
 
         ext = "mp3" if is_audio else "mp4"
@@ -1356,7 +1388,9 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
         out_file = os.path.join(task_dir, f"{clean_name}.{ext}")
 
         try:
+            print(f"[Helper API Sync] Downloading stream into {out_file}...")
             with requests.get(download_url, headers=headers, stream=True, timeout=(20, 1800)) as stream_resp:
+                print(f"[Helper API Sync] Stream HTTP {stream_resp.status_code}, length: {stream_resp.headers.get('Content-Length')}")
                 if stream_resp.status_code != 200:
                     if os.path.exists(out_file):
                         try:
@@ -1368,6 +1402,7 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
                     for chunk in stream_resp.iter_content(chunk_size=131072):
                         if chunk:
                             f.write(chunk)
+            print(f"[Helper API Sync] Stream download finished. Size: {os.path.getsize(out_file)} bytes")
         except Exception as e:
             print(f"[Helper API] Sync stream download failed: {e}")
             if os.path.exists(out_file):
