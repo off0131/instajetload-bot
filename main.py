@@ -52,6 +52,8 @@ from downloader import (
     get_spotify_info,
     download_generic,
     get_youtube_direct_cdn_url,
+    get_media_dimensions,
+    probe_with_ffmpeg,
 )
 from mtproto_uploader import send_mtproto_video, send_mtproto_audio
 

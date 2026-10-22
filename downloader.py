@@ -6,6 +6,7 @@ import re
 import glob
 import subprocess
 import json
+import html
 import time
 import urllib.request
 import urllib.parse
@@ -652,7 +653,7 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
                 [ff_bin, "-y", "-i", file_path, "-c", "copy", "-movflags", "+faststart", fast_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=15,
+                timeout=180,
             )
             if res.returncode == 0 and os.path.exists(fast_path) and os.path.getsize(fast_path) > 1024:
                 os.replace(fast_path, file_path)
@@ -671,6 +672,18 @@ YT_EXTRACTOR_ARGS = {
     }
 }
 
+def clean_web_text(text: str) -> str:
+    """Safely decodes HTML entities and unicode escapes without corrupting Persian text."""
+    if not text:
+        return ""
+    text = html.unescape(text)
+    if "\\u" in text:
+        try:
+            text = re.sub(r'\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), text)
+        except Exception:
+            pass
+    return text.strip()
+
 def fetch_youtube_web_info(video_id: str) -> Dict[str, Any]:
     """Scrapes title, channel, duration, and thumbnail directly from YouTube HTML without yt-dlp."""
     url = f"https://www.youtube.com/watch?v={video_id}"
@@ -682,13 +695,13 @@ def fetch_youtube_web_info(video_id: str) -> Dict[str, Any]:
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
+            html_content = resp.read().decode("utf-8", errors="ignore")
 
-        dur_m = re.search(r'\"approxDurationMs\":\"(\d+)\"', html)
+        dur_m = re.search(r'\"approxDurationMs\":\"(\d+)\"', html_content)
         if dur_m:
             duration = int(dur_m.group(1)) // 1000
         if not duration:
-            iso_m = re.search(r'itemprop=\"duration\" content=\"PT([^\"]+)\"', html)
+            iso_m = re.search(r'itemprop=\"duration\" content=\"PT([^\"]+)\"', html_content)
             if iso_m:
                 raw = iso_m.group(1)
                 h = int(re.search(r'(\d+)H', raw).group(1)) if 'H' in raw else 0
@@ -696,13 +709,13 @@ def fetch_youtube_web_info(video_id: str) -> Dict[str, Any]:
                 s = int(re.search(r'(\d+)S', raw).group(1)) if 'S' in raw else 0
                 duration = h * 3600 + m * 60 + s
 
-        title_m = re.search(r'<meta property=\"og:title\" content=\"([^\"]+)\"', html) or re.search(r'\"title\":\"([^\"]+)\"', html)
+        title_m = re.search(r'<meta property=\"og:title\" content=\"([^\"]+)\"', html_content) or re.search(r'\"title\":\"([^\"]+)\"', html_content)
         if title_m:
-            title = title_m.group(1).encode("utf-8").decode("unicode_escape", "ignore")
+            title = clean_web_text(title_m.group(1))
 
-        ch_m = re.search(r'<link itemprop=\"name\" content=\"([^\"]+)\"', html) or re.search(r'\"author\":\"([^\"+]+)\"', html)
+        ch_m = re.search(r'<link itemprop=\"name\" content=\"([^\"]+)\"', html_content) or re.search(r'\"author\":\"([^\"+]+)\"', html_content)
         if ch_m:
-            channel = ch_m.group(1).encode("utf-8").decode("unicode_escape", "ignore")
+            channel = clean_web_text(ch_m.group(1))
     except Exception as e:
         print(f"Direct YouTube web scrape note: {e}")
 
