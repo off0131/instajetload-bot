@@ -625,10 +625,16 @@ def cleanup_task_dir(task_dir: str):
         print(f"Error cleaning task dir {task_dir}: {e}")
 
 def has_faststart(path: str) -> bool:
-    """Quickly checks if MP4 moov atom is located before mdat atom for faststart streaming."""
+    """
+    Checks if MP4 has a valid progressive faststart moov atom and NO fragmented MP4 boxes.
+    Fragmented MP4s (containing moof or mvex) cannot be streamed progressively in Telegram.
+    """
     try:
         with open(path, "rb") as f:
-            header = f.read(4096)
+            header = f.read(131072)
+            # Fragmented MP4 indicators: presence of moof or mvex
+            if b"moof" in header or b"mvex" in header:
+                return False
             moov_pos = header.find(b"moov")
             mdat_pos = header.find(b"mdat")
             if moov_pos != -1 and (mdat_pos == -1 or moov_pos < mdat_pos):
@@ -640,8 +646,8 @@ def has_faststart(path: str) -> bool:
 def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
     """
     Ensures instant Telegram streaming and live preview:
-    1. Extracts a 1st-second JPEG frame for the Telegram video player cover.
-    2. Moves MP4 moov atom to byte 0 (+faststart) using zero-reencode fast copy.
+    1. Extracts a crisp 320px JPEG frame for the Telegram video player cover.
+    2. Moves MP4 moov atom to byte 0 (+faststart) and flattens fMP4 fragments into progressive MP4.
     """
     if not file_path or not os.path.exists(file_path):
         return file_path, None
@@ -651,11 +657,11 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     thumb_path = os.path.join(task_dir, f"{base_name}_thumb.jpg")
 
-    # 1. Generate thumbnail frame (try 1 second first, fallback to frame 0)
+    # 1. Generate crisp 320px thumbnail frame for Telegram cover
     if os.path.getsize(file_path) > 10000:
         try:
             subprocess.run(
-                [ff_bin, "-y", "-ss", "00:00:01", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path],
+                [ff_bin, "-y", "-ss", "00:00:01", "-i", file_path, "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "2", thumb_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=25,
@@ -666,7 +672,7 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
         if not os.path.exists(thumb_path) or os.path.getsize(thumb_path) == 0:
             try:
                 subprocess.run(
-                    [ff_bin, "-y", "-ss", "00:00:00", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path],
+                    [ff_bin, "-y", "-ss", "00:00:00", "-i", file_path, "-vframes", "1", "-vf", "scale=320:-1", "-q:v", "2", thumb_path],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=25,
@@ -722,7 +728,7 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
                 file_path = target_mp4
         except Exception as e:
             print(f"Remux to MP4 faststart note: {e}")
-    elif file_path.endswith(".mp4") and os.path.getsize(file_path) > 10000:
+    elif file_path.lower().endswith(".mp4") and os.path.getsize(file_path) > 10000:
         if not has_faststart(file_path):
             fast_path = os.path.join(task_dir, f"{base_name}_fast.mp4")
             try:
@@ -1441,8 +1447,8 @@ def download_youtube_via_helper_sync(
                     return None
                 total_len = int(stream_resp.headers.get("Content-Length") or 0)
                 downloaded = 0
-                with open(out_file, "wb") as f:
-                    for chunk in stream_resp.iter_content(chunk_size=131072):
+                with open(out_file, "wb", buffering=4*1024*1024) as f:
+                    for chunk in stream_resp.iter_content(chunk_size=1048576):
                         if chunk:
                             f.write(chunk)
                             downloaded += len(chunk)

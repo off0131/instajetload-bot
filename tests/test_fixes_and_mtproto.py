@@ -323,6 +323,19 @@ class TestFixesAndMTProto(unittest.TestCase):
             if os.path.exists(tf_path):
                 os.remove(tf_path)
 
+    def test_has_faststart_rejects_fragmented_mp4_with_moof_or_mvex(self):
+        """Verify has_faststart rejects fragmented MP4s containing moof or mvex boxes."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tf:
+            # Fake fragmented mp4 header with moof box
+            tf.write(b"\x00\x00\x00 ftypmp42\x00\x00\x00 moov\x00\x00\x00 moof\x00\x00\x00 mdat" + b"\x00" * 100)
+            tf_path = tf.name
+
+        try:
+            self.assertFalse(downloader.has_faststart(tf_path))
+        finally:
+            if os.path.exists(tf_path):
+                os.remove(tf_path)
+
     def test_cobalt_sync_success_pipeline(self):
         """Verify download_via_cobalt_sync properly calls API and streams faststart video."""
         mock_api_resp = MagicMock()

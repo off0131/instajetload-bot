@@ -246,7 +246,8 @@ async def fast_upload_file(
 
     uploader = ParallelTransferrer(client)
     try:
-        await uploader.init_upload(file_id, file_size, part_size_kb=512)
+        conn_count = 16 if file_size > 50 * 1024 * 1024 else 8
+        await uploader.init_upload(file_id, file_size, part_size_kb=512, connection_count=conn_count)
         bytes_sent = 0
         with open(file_path, "rb") as f:
             while True:
