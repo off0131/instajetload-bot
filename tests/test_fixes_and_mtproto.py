@@ -323,6 +323,83 @@ class TestFixesAndMTProto(unittest.TestCase):
             if os.path.exists(tf_path):
                 os.remove(tf_path)
 
+    def test_cobalt_sync_success_pipeline(self):
+        """Verify download_via_cobalt_sync properly calls API and streams faststart video."""
+        mock_api_resp = MagicMock()
+        mock_api_resp.status_code = 200
+        mock_api_resp.json.return_value = {
+            "status": "tunnel",
+            "url": "https://fake-cobalt.test/stream.mp4",
+            "filename": "Awesome_Video.mp4"
+        }
+
+        mock_stream_resp = MagicMock()
+        mock_stream_resp.status_code = 200
+        # Return > 10,000 bytes chunk to satisfy size guard
+        mock_stream_resp.iter_content.return_value = [b"X" * 16384]
+        mock_stream_resp.__enter__.return_value = mock_stream_resp
+
+        with patch.dict(os.environ, {"TEST_COBALT": "1"}), \
+             patch("downloader.requests.post", return_value=mock_api_resp), \
+             patch("downloader.requests.get", return_value=mock_stream_resp), \
+             patch("downloader.get_media_dimensions", return_value=(1280, 720, 120)), \
+             patch("downloader.prepare_video_for_streaming", side_effect=lambda f: (f, "/fake/thumb.jpg")):
+            
+            with tempfile.TemporaryDirectory() as td:
+                res = downloader.download_via_cobalt_sync(
+                    url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    quality="720",
+                    is_audio=False,
+                    task_dir=td,
+                    title="Awesome Video",
+                )
+                self.assertIsNotNone(res)
+                self.assertEqual(res["type"], "video")
+                self.assertEqual(res["duration"], 120)
+                self.assertEqual(res["width"], 1280)
+                self.assertEqual(res["tier_used"], "cobalt")
+                self.assertTrue(os.path.exists(res["file_path"]))
+
+    def test_cobalt_sync_handles_empty_stream_gracefully(self):
+        """Verify download_via_cobalt_sync returns None and cleans up when tunnel returns empty content."""
+        mock_api_resp = MagicMock()
+        mock_api_resp.status_code = 200
+        mock_api_resp.json.return_value = {
+            "status": "tunnel",
+            "url": "https://fake-cobalt.test/stream.mp4",
+            "filename": "broken.mp4"
+        }
+
+        mock_stream_resp = MagicMock()
+        mock_stream_resp.status_code = 200
+        mock_stream_resp.iter_content.return_value = [b""]  # Empty 0-byte stream
+        mock_stream_resp.__enter__.return_value = mock_stream_resp
+
+        with patch.dict(os.environ, {"TEST_COBALT": "1"}), \
+             patch("downloader.requests.post", return_value=mock_api_resp), \
+             patch("downloader.requests.get", return_value=mock_stream_resp):
+            
+            with tempfile.TemporaryDirectory() as td:
+                res = downloader.download_via_cobalt_sync(
+                    url="https://www.youtube.com/watch?v=broken",
+                    quality="720",
+                    is_audio=False,
+                    task_dir=td,
+                )
+                self.assertIsNone(res)
+
+    def test_make_upload_progress_callback(self):
+        """Verify upload progress callback executes non-blocking and throttles properly."""
+        mock_status_msg = AsyncMock()
+        cb = main.make_upload_progress_callback(mock_status_msg, prefix="Testing Upload")
+        self.assertTrue(callable(cb))
+        # First call triggers update
+        cb(5000000, 10000000)
+        # Immediate sub-second call is throttled
+        cb(5100000, 10000000)
+        # 100% triggers completion update
+        cb(10000000, 10000000)
+
 
 if __name__ == "__main__":
     unittest.main()

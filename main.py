@@ -743,6 +743,49 @@ async def process_youtube_url(message: types.Message, url: str):
             logger.error(f"YouTube info error: {e}", exc_info=True)
             await status_msg.edit_text(get_text("err_general", lang))
 
+def make_upload_progress_callback(status_msg, prefix: str = "🚀 در حال ارسال فایل به تلگرام..."):
+    """
+    Creates a non-blocking, rate-limited progress callback for high-speed MTProto uploads.
+    Throttles message edits to at most once per 3.5 seconds to respect Telegram API rate limits.
+    """
+    last_edit = 0.0
+    last_percent = -1
+
+    async def _do_edit(text: str):
+        try:
+            await status_msg.edit_text(text, parse_mode="html")
+        except Exception:
+            pass
+
+    def callback(current: int, total: int):
+        nonlocal last_edit, last_percent
+        now = time.time()
+        if total <= 0:
+            return
+        percent = int(current * 100 / total)
+        if (now - last_edit >= 3.5 and percent != last_percent) or percent >= 100:
+            last_edit = now
+            last_percent = percent
+            cur_mb = current / (1024 * 1024)
+            tot_mb = total / (1024 * 1024)
+            bar_len = 10
+            filled = int(bar_len * percent / 100)
+            bar = "▰" * filled + "▱" * (bar_len - filled)
+            text = (
+                f"{prefix}\n\n"
+                f"📊 <b>پیشرفت آپلود:</b> {percent}%\n"
+                f"<code>[{bar}]</code>\n"
+                f"💾 <b>حجم:</b> {cur_mb:.1f} / {tot_mb:.1f} MB"
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_do_edit(text))
+            except RuntimeError:
+                pass
+
+    return callback
+
+
 @dp.callback_query(F.data.startswith("yt:"))
 async def handle_youtube_callback(callback: types.CallbackQuery):
     data = callback.data
@@ -842,6 +885,12 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 if file_size_mb <= 2000.0:
                     try:
                         logger.info(f"Delivering large YouTube media directly via MTProto ({file_size_mb:.1f} MB)")
+                        raw_title = res.get("title", "YouTube Media")
+                        short_title = (raw_title[:45] + "...") if len(raw_title) > 48 else raw_title
+                        prog_cb = make_upload_progress_callback(
+                            status_msg,
+                            prefix=f"🚀 <b>در حال ارسال مستقیم به تلگرام...</b>\n🎬 <code>{html.escape(short_title)}</code>"
+                        )
                         if is_audio:
                             sent_ok = await send_mtproto_audio(
                                 chat_id=callback.message.chat.id,
@@ -850,6 +899,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                                 title=res.get("title", "YouTube Audio"),
                                 performer=res.get("artist") or "YouTube",
                                 duration=dur_val,
+                                progress_callback=prog_cb,
                             )
                         else:
                             sent_ok = await send_mtproto_video(
@@ -860,6 +910,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                                 width=width_val,
                                 height=height_val,
                                 thumb=thumb_file,
+                                progress_callback=prog_cb,
                             )
                         if sent_ok:
                             if callback.from_user:
@@ -953,6 +1004,12 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                         }], formatted_caption)
             except Exception as e_bot_send:
                 logger.warning(f"Standard bot delivery failed ({e_bot_send}), falling back to MTProto: {e_bot_send}")
+                raw_title = res.get("title", "YouTube Media")
+                short_title = (raw_title[:45] + "...") if len(raw_title) > 48 else raw_title
+                prog_cb = make_upload_progress_callback(
+                    status_msg,
+                    prefix=f"🚀 <b>در حال ارسال مستقیم به تلگرام...</b>\n🎬 <code>{html.escape(short_title)}</code>"
+                )
                 if is_audio:
                     mt_ok = await send_mtproto_audio(
                         chat_id=callback.message.chat.id,
@@ -961,6 +1018,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                         title=res.get("title", "YouTube Audio"),
                         performer=res.get("artist") or "YouTube",
                         duration=dur_val,
+                        progress_callback=prog_cb,
                     )
                 else:
                     mt_ok = await send_mtproto_video(
@@ -971,6 +1029,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                         width=width_val,
                         height=height_val,
                         thumb=thumb_file,
+                        progress_callback=prog_cb,
                     )
                 if not mt_ok:
                     raise e_bot_send
@@ -1170,6 +1229,12 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
             if file_size_mb > 49.5 and file_size_mb <= 2000.0:
                 try:
                     logger.info(f"Delivering large generic media directly via MTProto ({file_size_mb:.1f} MB)")
+                    raw_title = res.get("title", "Media")
+                    short_title = (raw_title[:45] + "...") if len(raw_title) > 48 else raw_title
+                    prog_cb = make_upload_progress_callback(
+                        status_msg,
+                        prefix=f"🚀 <b>در حال ارسال مستقیم به تلگرام...</b>\n🎬 <code>{html.escape(short_title)}</code>"
+                    )
                     if m_type == "audio":
                         sent_ok = await send_mtproto_audio(
                             chat_id=message.chat.id,
@@ -1178,6 +1243,7 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
                             title=res.get("title", "Audio"),
                             performer=res.get("artist") or p_name,
                             duration=res.get("duration") or 0,
+                            progress_callback=prog_cb,
                         )
                     else:
                         sent_ok = await send_mtproto_video(
@@ -1187,6 +1253,7 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
                             duration=res.get("duration") or 0,
                             width=res.get("width") or 0,
                             height=res.get("height") or 0,
+                            progress_callback=prog_cb,
                         )
                     if sent_ok:
                         if message.from_user:

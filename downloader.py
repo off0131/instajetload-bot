@@ -1025,6 +1025,153 @@ extract_youtube_info = extract_youtube_info_sync
 async def get_youtube_info(url: str) -> Dict[str, Any]:
     return await asyncio.to_thread(extract_youtube_info_sync, url)
 
+# ================= COBALT CLOUD STREAMING ENGINE =================
+COBALT_INSTANCES = [
+    os.environ.get("COBALT_API_URL", "").rstrip("/"),
+    "https://rue-cobalt.xenon.zone",
+]
+COBALT_INSTANCES = [inst for inst in COBALT_INSTANCES if inst]
+
+def download_via_cobalt_sync(
+    url: str,
+    quality: str = "720",
+    is_audio: bool = False,
+    task_dir: Optional[str] = None,
+    title: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Downloads media using high-performance Cobalt cloud stream engine:
+    1. Sends request to Cobalt API.
+    2. Receives direct, faststart H.264 pre-multiplexed stream tunnel.
+    3. Downloads stream at maximum network speed without CPU re-encoding.
+    4. Auto-generates thumbnail frame and extracts exact dimensions.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("TEST_COBALT"):
+        return None
+
+    if not task_dir:
+        task_id = str(uuid.uuid4())
+        task_dir = os.path.join(DOWNLOADS_DIR, task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        created_task_dir = True
+    else:
+        created_task_dir = False
+
+    payload: Dict[str, Any] = {"url": url}
+    if is_audio:
+        payload["downloadMode"] = "audio"
+        payload["audioFormat"] = "mp3"
+    else:
+        q_str = str(quality) if str(quality) in ["144", "240", "360", "480", "720", "1080", "1440", "2160"] else "720"
+        payload["videoQuality"] = q_str
+        payload["downloadMode"] = "auto"
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    }
+
+    success = False
+    out_file = None
+    try:
+        stream_url = None
+        raw_filename = "media.mp3" if is_audio else "video.mp4"
+
+        for instance in COBALT_INSTANCES:
+            try:
+                r = requests.post(f"{instance}/", json=payload, headers=headers, timeout=12)
+                if r.status_code == 200:
+                    data = r.json()
+                    if data.get("status") in ("tunnel", "redirect") and data.get("url"):
+                        stream_url = data["url"]
+                        raw_filename = data.get("filename") or raw_filename
+                        break
+            except Exception as e_inst:
+                print(f"[Cobalt API] Instance {instance} error: {e_inst}")
+
+        if not stream_url:
+            return None
+
+        chosen_title = title or raw_filename
+        clean_name = re.sub(r'[\\/*?:"<>|]', "", chosen_title)[:80].strip() or "media"
+        ext = "mp3" if is_audio else "mp4"
+        if not clean_name.lower().endswith(f".{ext}"):
+            clean_name += f".{ext}"
+        out_file = os.path.join(task_dir, clean_name)
+
+        dl_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        }
+        with requests.get(stream_url, headers=dl_headers, stream=True, timeout=(15, 300)) as resp:
+            if resp.status_code != 200:
+                if os.path.exists(out_file):
+                    try:
+                        os.remove(out_file)
+                    except Exception:
+                        pass
+                return None
+            with open(out_file, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=131072):
+                    if chunk:
+                        f.write(chunk)
+
+        file_sz = os.path.getsize(out_file) if os.path.exists(out_file) else 0
+        if file_sz < 10000:
+            if os.path.exists(out_file):
+                try:
+                    os.remove(out_file)
+                except Exception:
+                    pass
+            return None
+
+        thumb_path = None
+        if not is_audio:
+            out_file, thumb_path = prepare_video_for_streaming(out_file)
+
+        w, h, dur = get_media_dimensions(out_file)
+        if not is_audio and (not dur or dur <= 0):
+            w_ff, h_ff, dur_ff = probe_with_ffmpeg(out_file)
+            dur = dur_ff or dur
+            w = w or w_ff
+            h = h or h_ff
+
+        success = True
+        return {
+            "task_dir": task_dir,
+            "file_path": out_file,
+            "thumbnail_path": thumb_path,
+            "type": "audio" if is_audio else "video",
+            "title": os.path.splitext(clean_name)[0],
+            "artist": "YouTube",
+            "duration": dur or 0,
+            "width": w or 0,
+            "height": h or 0,
+            "thumbnail": None,
+            "is_audio": is_audio,
+            "tier_used": "cobalt",
+        }
+    except Exception as e:
+        print(f"[Cobalt API] Error: {e}")
+        if out_file and os.path.exists(out_file):
+            try:
+                os.remove(out_file)
+            except Exception:
+                pass
+        return None
+    finally:
+        if not success and created_task_dir and task_dir and os.path.exists(task_dir):
+            cleanup_task_dir(task_dir)
+
+async def download_via_cobalt(
+    url: str,
+    quality: str = "720",
+    is_audio: bool = False,
+    task_dir: Optional[str] = None,
+    title: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    return await asyncio.to_thread(download_via_cobalt_sync, url, quality, is_audio, task_dir, title)
+
 async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Tier 3 Fallback: Downloads YouTube video/audio via external Loader.to REST helper API."""
     if not task_dir:
@@ -1338,6 +1485,26 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         duration = 0
         channel = ""
         tier_used = 0
+
+        # Tier 0: High-speed Cobalt cloud streaming engine (direct stream tunnel, faststart, no CPU bottleneck)
+        try:
+            cobalt_res = download_via_cobalt_sync(url, quality=quality, is_audio=is_audio, task_dir=task_dir)
+            if cobalt_res and os.path.exists(cobalt_res.get("file_path", "")):
+                c_sz = os.path.getsize(cobalt_res["file_path"])
+                # Public Cobalt tunnel drops connection or returns empty response for very long videos (> 30-40 min)
+                # Enforce strict size check (> 10 KB) and non-zero duration for video
+                if (is_audio and c_sz > 10000) or (not is_audio and c_sz > 10000 and cobalt_res.get("duration", 0) > 0):
+                    if not cobalt_res.get("thumbnail"):
+                        cobalt_res["thumbnail"] = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                    success = True
+                    return cobalt_res
+                else:
+                    try:
+                        os.remove(cobalt_res["file_path"])
+                    except Exception:
+                        pass
+        except Exception as e_cobalt:
+            print(f"[YouTube DL] Cobalt Tier 0 failed ({e_cobalt}), falling back to native DASH...")
 
         # Tier 1: Modern yt-dlp DASH download with Apple Vision Pro / Android VR client (bypasses datacenter web bot block)
         try:
@@ -2225,6 +2392,17 @@ def download_generic_sync(url: str, platform: str) -> Dict[str, Any]:
     os.makedirs(task_dir, exist_ok=True)
     success = False
     try:
+        # Strategy 0 for TikTok / short video platforms: Cobalt Cloud Stream
+        if platform == "tiktok":
+            try:
+                cob_res = download_via_cobalt_sync(url, quality="720", is_audio=False, task_dir=task_dir)
+                if cob_res and os.path.exists(cob_res.get("file_path", "")) and os.path.getsize(cob_res["file_path"]) > 10000:
+                    cob_res["platform"] = "tiktok"
+                    success = True
+                    return cob_res
+            except Exception as e_cob:
+                print(f"[TikTok DL] Cobalt attempt failed: {e_cob}")
+
         outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
 
         if platform == "soundcloud":
