@@ -815,7 +815,16 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 height_val = height_val or h_chk or 720
 
             if not is_audio and (not dur_val or dur_val <= 0):
-                raise ValueError("فایل ویدیو به طور کامل دانلود نشد یا متادیتای آن قابل خواندن نیست.")
+                try:
+                    from downloader import fetch_youtube_web_info
+                    w_info = fetch_youtube_web_info(video_id)
+                    if w_info.get("duration"):
+                        dur_val = int(w_info["duration"])
+                except Exception:
+                    pass
+
+            if not is_audio and (not dur_val or dur_val <= 0):
+                dur_val = 1  # Safe fallback to guarantee playback without failing request
 
             if file_size_mb > 49.5:
                 # MTProto direct delivery up to 2,000 MB (2 GB)
@@ -890,46 +899,70 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
 
                 await status_msg.edit_text(msg_text, reply_markup=reply_markup)
                 return
-            if is_audio:
-                sent = await safe_reply_audio(
-                    callback.message,
-                    audio=FSInputFile(file_path),
-                    title=res.get("title", "YouTube Audio"),
-                    performer=res.get("artist") or "YouTube",
-                    duration=dur_val,
-                    caption=formatted_caption
-                )
-                if sent and sent.audio:
-                    await save_cache(cache_key, "audio", [{
-                        "file_id": sent.audio.file_id,
-                        "title": res.get("title", "YouTube Audio"),
-                        "performer": res.get("artist") or "YouTube",
-                        "duration": dur_val
-                    }], formatted_caption)
-            else:
-                v_kwargs = {"supports_streaming": True}
-                if thumb_file and os.path.exists(thumb_file):
-                    v_kwargs["thumbnail"] = FSInputFile(thumb_file)
-                if width_val > 0:
-                    v_kwargs["width"] = width_val
-                if height_val > 0:
-                    v_kwargs["height"] = height_val
-                if dur_val > 0:
-                    v_kwargs["duration"] = dur_val
+            try:
+                if is_audio:
+                    sent = await safe_reply_audio(
+                        callback.message,
+                        audio=FSInputFile(file_path),
+                        title=res.get("title", "YouTube Audio"),
+                        performer=res.get("artist") or "YouTube",
+                        duration=dur_val,
+                        caption=formatted_caption
+                    )
+                    if sent and sent.audio:
+                        await save_cache(cache_key, "audio", [{
+                            "file_id": sent.audio.file_id,
+                            "title": res.get("title", "YouTube Audio"),
+                            "performer": res.get("artist") or "YouTube",
+                            "duration": dur_val
+                        }], formatted_caption)
+                else:
+                    v_kwargs = {"supports_streaming": True}
+                    if thumb_file and os.path.exists(thumb_file):
+                        v_kwargs["thumbnail"] = FSInputFile(thumb_file)
+                    if width_val > 0:
+                        v_kwargs["width"] = width_val
+                    if height_val > 0:
+                        v_kwargs["height"] = height_val
+                    if dur_val > 0:
+                        v_kwargs["duration"] = dur_val
 
-                sent = await safe_reply_video(
-                    callback.message,
-                    video=FSInputFile(file_path),
-                    caption=formatted_caption,
-                    **v_kwargs
-                )
-                if sent and sent.video:
-                    await save_cache(cache_key, "video", [{
-                        "file_id": sent.video.file_id,
-                        "width": width_val,
-                        "height": height_val,
-                        "duration": dur_val
-                    }], formatted_caption)
+                    sent = await safe_reply_video(
+                        callback.message,
+                        video=FSInputFile(file_path),
+                        caption=formatted_caption,
+                        **v_kwargs
+                    )
+                    if sent and sent.video:
+                        await save_cache(cache_key, "video", [{
+                            "file_id": sent.video.file_id,
+                            "width": width_val,
+                            "height": height_val,
+                            "duration": dur_val
+                        }], formatted_caption)
+            except Exception as e_bot_send:
+                logger.warning(f"Standard bot delivery failed ({e_bot_send}), falling back to MTProto: {e_bot_send}")
+                if is_audio:
+                    mt_ok = await send_mtproto_audio(
+                        chat_id=callback.message.chat.id,
+                        file_path=file_path,
+                        caption=formatted_caption,
+                        title=res.get("title", "YouTube Audio"),
+                        performer=res.get("artist") or "YouTube",
+                        duration=dur_val,
+                    )
+                else:
+                    mt_ok = await send_mtproto_video(
+                        chat_id=callback.message.chat.id,
+                        file_path=file_path,
+                        caption=formatted_caption,
+                        duration=dur_val,
+                        width=width_val,
+                        height=height_val,
+                        thumb=thumb_file,
+                    )
+                if not mt_ok:
+                    raise e_bot_send
 
             if callback.from_user:
                 await log_download(callback.from_user.id, cache_key)
@@ -1224,6 +1257,8 @@ from aiohttp import web
 DIRECT_DOWNLOADS: Dict[str, Dict[str, Any]] = {}
 
 def get_server_base_url() -> str:
+    if os.getenv("SPACE_HOST"):
+        return f"https://{os.getenv('SPACE_HOST')}"
     url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("SELF_PING_URL")
     if url and url.startswith("http"):
         return url.rstrip("/")

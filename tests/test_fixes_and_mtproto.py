@@ -159,6 +159,113 @@ class TestFixesAndMTProto(unittest.TestCase):
             if os.path.exists(tmp_name):
                 os.remove(tmp_name)
 
+    def test_mtproto_cleanup_raises_on_worker_error(self):
+        """Verify ParallelTransferrer._cleanup raises if an upload worker task failed."""
+        client_mock = MagicMock()
+        client_mock.loop = MagicMock()
+        uploader = mtproto_uploader.ParallelTransferrer(client_mock)
+
+        sender_failing = MagicMock()
+        sender_failing.disconnect = AsyncMock(side_effect=RuntimeError("Connection broke"))
+        uploader.senders = [sender_failing]
+
+        with self.assertRaises(RuntimeError):
+            asyncio.run(uploader._cleanup())
+
+    def test_send_mtproto_video_sets_html_parse_mode_and_resolves_dims(self):
+        """Verify send_mtproto_video passes parse_mode='html' and auto-resolves missing dimensions."""
+        client_mock = MagicMock()
+        client_mock.is_connected.return_value = True
+        client_mock.send_file = AsyncMock(return_value=True)
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            f.write(b"0" * 20000)
+            tmp_name = f.name
+
+        try:
+            with patch("mtproto_uploader.get_mtproto_client", AsyncMock(return_value=client_mock)), \
+                 patch("mtproto_uploader.fast_upload_file", AsyncMock(return_value="mock_input_file")), \
+                 patch("downloader.get_media_dimensions", return_value=(1920, 1080, 120)):
+                ok = asyncio.run(mtproto_uploader.send_mtproto_video(
+                    chat_id=123456,
+                    file_path=tmp_name,
+                    caption="<b>Bold Title</b>",
+                    duration=0,  # Missing
+                    width=0,     # Missing
+                    height=0,    # Missing
+                ))
+                self.assertTrue(ok)
+                client_mock.send_file.assert_awaited_once()
+                call_kwargs = client_mock.send_file.call_args[1]
+                self.assertEqual(call_kwargs["parse_mode"], "html")
+                # Ensure dimensions were auto-resolved
+                attrs = call_kwargs["attributes"]
+                v_attr = [a for a in attrs if hasattr(a, "w")][0]
+                self.assertEqual(v_attr.w, 1920)
+                self.assertEqual(v_attr.h, 1080)
+                self.assertEqual(v_attr.duration, 120)
+        finally:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
+
+    def test_prepare_video_for_streaming_remuxes_non_mp4(self):
+        """Verify non-mp4 videos (.webm, .mkv) are remuxed with +faststart to .mp4 container."""
+        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+            f.write(b"0" * 20000)
+            tmp_name = f.name
+
+        try:
+            with patch("downloader.subprocess.run") as mock_sub:
+                def fake_run(cmd, **kwargs):
+                    # Simulate creating the target mp4
+                    target = cmd[-1]
+                    if target.endswith(".mp4"):
+                        with open(target, "wb") as f_out:
+                            f_out.write(b"0" * 20000)
+                    return MagicMock(returncode=0)
+
+                mock_sub.side_effect = fake_run
+                res_path, _ = downloader.prepare_video_for_streaming(tmp_name)
+                self.assertTrue(res_path.endswith(".mp4"))
+                calls = mock_sub.call_args_list
+                remux_calls = [c for c in calls if "+faststart" in c[0][0] and "-c:v" in c[0][0]]
+                self.assertTrue(len(remux_calls) >= 1)
+                if os.path.exists(res_path):
+                    os.remove(res_path)
+        finally:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
+
+    def test_web_scrape_duration_populates_persian_labels_in_main(self):
+        """Verify fetch_youtube_web_info duration populates Persian labels when initial duration is 0."""
+        mock_web_info = {
+            "title": "ویدیوی آزمایشی",
+            "duration": 5157,  # 85 min 57 sec
+            "channel": "کانال تست",
+            "thumbnail": "https://i.ytimg.com/vi/test_id/hqdefault.jpg"
+        }
+        with patch("downloader.fetch_youtube_web_info", return_value=mock_web_info):
+            w_info = downloader.fetch_youtube_web_info("test_id")
+            self.assertEqual(w_info["duration"], 5157)
+            parsed = downloader.parse_youtube_qualities({"duration": w_info["duration"], "formats": []})
+            quals = {q["res"]: q["label"] for q in parsed["video_qualities"]}
+            self.assertEqual(quals[1080], "1080p · ۱٫۶ گیگ")
+            self.assertEqual(quals[720], "720p · ۱٫۰ گیگ")
+
+    def test_parse_youtube_qualities_multi_format_filesize_max(self):
+        """Verify format parsing selects format with valid filesize when format 0 has None."""
+        info = {
+            "duration": 100,
+            "formats": [
+                {"height": 1080, "vcodec": "avc1", "filesize": None, "filesize_approx": None},
+                {"height": 1080, "vcodec": "avc1", "filesize": 80 * 1024 * 1024, "filesize_approx": 80 * 1024 * 1024},
+            ]
+        }
+        parsed = downloader.parse_youtube_qualities(info)
+        quals = {q["res"]: q for q in parsed["video_qualities"]}
+        self.assertGreater(quals[1080]["size_bytes"], 70 * 1024 * 1024)
+        self.assertIn("مگ", quals[1080]["label"])
+
 
 if __name__ == "__main__":
     unittest.main()

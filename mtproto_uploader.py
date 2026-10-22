@@ -56,6 +56,7 @@ async def get_mtproto_client() -> Optional[TelegramClient]:
             if not await client.is_user_authorized():
                 await client.start(bot_token=BOT_TOKEN)
             _client = client
+            _client.parse_mode = "html"
             logger.info("⚡ MTProto 2GB Uploader Engine started successfully.")
             return _client
         except Exception as e:
@@ -126,11 +127,14 @@ class ParallelTransferrer:
 
     async def _cleanup(self) -> None:
         if self.senders:
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *[sender.disconnect() for sender in self.senders],
                 return_exceptions=True,
             )
             self.senders = None
+            for r in results:
+                if isinstance(r, Exception):
+                    raise r
 
     @staticmethod
     def _get_connection_count(
@@ -156,10 +160,12 @@ class ParallelTransferrer:
         )
         if not self.auth_key:
             auth = await self.client(ExportAuthorizationRequest(self.dc_id))
-            self.client._init_request.query = ImportAuthorizationRequest(
+            from copy import copy
+            init_req = copy(self.client._init_request)
+            init_req.query = ImportAuthorizationRequest(
                 id=auth.id, bytes=auth.bytes
             )
-            req = InvokeWithLayerRequest(LAYER, self.client._init_request)
+            req = InvokeWithLayerRequest(LAYER, init_req)
             await sender.send(req)
             self.auth_key = sender.auth_key
         return sender
@@ -291,16 +297,34 @@ async def send_mtproto_video(
         w = int(round(float(width or 0)))
         h = int(round(float(height or 0)))
 
+        # Auto-resolve dimensions if missing/zero
+        if dur <= 0 or w <= 0 or h <= 0:
+            try:
+                from downloader import get_media_dimensions
+                w_chk, h_chk, dur_chk = get_media_dimensions(file_path)
+                dur = dur or dur_chk or 1
+                w = w or w_chk or 1280
+                h = h or h_chk or 720
+            except Exception:
+                dur = dur or 1
+                w = w or 1280
+                h = h or 720
+
         attrs = [
             DocumentAttributeVideo(
                 duration=dur,
                 w=w,
                 h=h,
                 supports_streaming=True,
-            )
+            ),
+            DocumentAttributeFilename(file_name=filename),
         ]
 
         thumb_path = thumb if (thumb and os.path.exists(thumb)) else None
+        if not thumb_path:
+            candidate = os.path.join(os.path.dirname(file_path), f"{os.path.splitext(filename)[0]}_thumb.jpg")
+            if os.path.exists(candidate) and os.path.getsize(candidate) > 0:
+                thumb_path = candidate
 
         # Upload file at high speed via parallel MTProto chunk pipeline
         file_to_send: Union[TypeInputFile, str] = file_path
@@ -324,6 +348,7 @@ async def send_mtproto_video(
             supports_streaming=True,
             mime_type="video/mp4",
             attributes=attrs,
+            parse_mode="html",
             progress_callback=progress_callback if file_to_send == file_path else None,
         )
         return True
@@ -380,6 +405,7 @@ async def send_mtproto_audio(
             file=file_to_send,
             caption=caption,
             attributes=attrs,
+            parse_mode="html",
             progress_callback=progress_callback if file_to_send == file_path else None,
         )
         return True

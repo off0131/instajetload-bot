@@ -184,7 +184,7 @@ def probe_with_ffmpeg(file_path: str) -> tuple[int, int, int]:
             stderr=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             text=True,
-            timeout=10
+            timeout=30
         )
         out = res.stderr
         dur_m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", out)
@@ -572,6 +572,7 @@ def _download_sync(url: str) -> Dict[str, Any]:
             ext = os.path.splitext(file_path)[1].lower()
             if ext in [".mp4", ".mov", ".mkv", ".webm"]:
                 media_type = "video"
+                file_path, _ = prepare_video_for_streaming(file_path)
             elif ext in [".jpg", ".jpeg", ".png", ".webp"]:
                 media_type = "photo"
             else:
@@ -629,7 +630,7 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
                 [ff_bin, "-y", "-ss", "00:00:01", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=5,
+                timeout=25,
             )
         except Exception as e:
             print(f"Thumbnail extraction at 1s note: {e}")
@@ -640,13 +641,31 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
                     [ff_bin, "-y", "-ss", "00:00:00", "-i", file_path, "-vframes", "1", "-q:v", "2", thumb_path],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=5,
+                    timeout=25,
                 )
             except Exception:
                 pass
 
-    # 2. Faststart moov atom to beginning of MP4
-    if file_path.endswith(".mp4") and os.path.getsize(file_path) > 10000:
+    # 2. Ensure MP4 format and faststart moov atom at byte 0 for instant playback
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext != ".mp4" and os.path.getsize(file_path) > 10000:
+        target_mp4 = os.path.join(task_dir, f"{base_name}.mp4")
+        try:
+            res = subprocess.run(
+                [ff_bin, "-y", "-i", file_path, "-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart", target_mp4],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=180,
+            )
+            if res.returncode == 0 and os.path.exists(target_mp4) and os.path.getsize(target_mp4) > 1024:
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+                file_path = target_mp4
+        except Exception as e:
+            print(f"Remux to MP4 faststart note: {e}")
+    elif file_path.endswith(".mp4") and os.path.getsize(file_path) > 10000:
         fast_path = os.path.join(task_dir, f"{base_name}_fast.mp4")
         try:
             res = subprocess.run(
@@ -792,7 +811,10 @@ def parse_youtube_qualities(info: Dict[str, Any]) -> Dict[str, Any]:
         matching_v = [f for f in formats if f.get("height") == tr and f.get("vcodec") != "none"]
         sz = 0
         if matching_v:
-            sz = matching_v[0].get("filesize") or matching_v[0].get("filesize_approx") or 0
+            for f in matching_v:
+                f_sz = f.get("filesize") or f.get("filesize_approx") or 0
+                if f_sz > sz:
+                    sz = f_sz
             if sz:
                 sz += best_audio_size
 
@@ -916,21 +938,22 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
             r = requests.get(oembed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
             if r.status_code == 200:
                 data = r.json()
-                oe_title = data.get("title") or "YouTube Video"
-                oe_channel = data.get("author_name") or "YouTube"
-                oe_thumb = data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-                duration = data.get("duration") or 0
-                parsed = parse_youtube_qualities({"duration": duration, "formats": []})
-                return {
-                    "id": video_id,
-                    "title": oe_title,
-                    "duration": duration,
-                    "thumbnail": oe_thumb,
-                    "channel": oe_channel,
-                    "resolutions": [720, 480, 360],
-                    "qualities_data": parsed,
-                    "url": clean_url,
-                }
+                if isinstance(data, dict):
+                    oe_title = data.get("title") or "YouTube Video"
+                    oe_channel = data.get("author_name") or "YouTube"
+                    oe_thumb = data.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                    duration = data.get("duration") or 0
+                    parsed = parse_youtube_qualities({"duration": duration, "formats": []})
+                    return {
+                        "id": video_id,
+                        "title": oe_title,
+                        "duration": duration,
+                        "thumbnail": oe_thumb,
+                        "channel": oe_channel,
+                        "resolutions": [720, 480, 360],
+                        "qualities_data": parsed,
+                        "url": clean_url,
+                    }
         except Exception as e_oembed:
             print(f"oEmbed fallback error: {e_oembed}")
 
