@@ -400,6 +400,111 @@ class TestFixesAndMTProto(unittest.TestCase):
         # 100% triggers completion update
         cb(10000000, 10000000)
 
+    def test_make_upload_progress_callback_chunked_streaming(self):
+        """Verify progress callback supports chunked streams with total=0 without crashing."""
+        mock_status_msg = AsyncMock()
+        cb = main.make_upload_progress_callback(mock_status_msg, prefix="Testing Stream")
+        self.assertTrue(callable(cb))
+        cb(1048576, 0)
+        cb(2097152, 0)
+
+    def test_helper_sync_success_pipeline_with_progress_and_button_param(self):
+        """Verify download_youtube_via_helper_sync requests button=1, polls CDN, and calls progress callback."""
+        mock_init_resp = MagicMock()
+        mock_init_resp.status_code = 200
+        mock_init_resp.json.return_value = {
+            "success": True,
+            "progress_url": "https://fake-helper.test/progress?id=123",
+            "title": "MrBeast Test"
+        }
+
+        mock_poll_resp = MagicMock()
+        mock_poll_resp.status_code = 200
+        mock_poll_resp.json.return_value = {
+            "success": 1,
+            "download_url": "https://ricky4.savenow.to/api/v2/download/fake_hash",
+            "title": "MrBeast Test"
+        }
+
+        mock_stream_resp = MagicMock()
+        mock_stream_resp.status_code = 200
+        mock_stream_resp.headers = {"Content-Length": "100000", "Content-Type": "video/mp4"}
+        mock_stream_resp.iter_content.return_value = [b"A" * 50000, b"B" * 50000]
+        mock_stream_resp.__enter__.return_value = mock_stream_resp
+
+        def fake_get(url, *args, **kwargs):
+            if "download.php" in url:
+                self.assertIn("button=1", url)
+                self.assertIn("start=1", url)
+                return mock_init_resp
+            elif "progress?id=" in url:
+                return mock_poll_resp
+            elif "savenow.to" in url:
+                return mock_stream_resp
+            return MagicMock(status_code=404)
+
+        progress_calls = []
+        def test_cb(cur, tot):
+            progress_calls.append((cur, tot))
+
+        with patch.dict(os.environ, {"TEST_HELPER": "1"}), \
+             patch("downloader.requests.get", side_effect=fake_get), \
+             patch("time.sleep", return_value=None), \
+             patch("downloader.get_media_dimensions", return_value=(1280, 720, 60)), \
+             patch("downloader.prepare_video_for_streaming", side_effect=lambda f: (f, "/fake/thumb.jpg")):
+            
+            with tempfile.TemporaryDirectory() as td:
+                res = downloader.download_youtube_via_helper_sync(
+                    video_id="fake_id",
+                    quality="720",
+                    task_dir=td,
+                    progress_callback=test_cb
+                )
+                self.assertIsNotNone(res)
+                self.assertEqual(res["type"], "video")
+                self.assertEqual(res["duration"], 60)
+                self.assertEqual(res["tier_used"], 0)
+                self.assertTrue(len(progress_calls) >= 2)
+                self.assertEqual(progress_calls[-1], (100000, 100000))
+
+    def test_helper_sync_rejects_ad_networks_and_html_stream(self):
+        """Verify helper rejects ad networks (ey43.com) and aborts if stream returns HTML."""
+        mock_init_resp = MagicMock()
+        mock_init_resp.status_code = 200
+        mock_init_resp.json.return_value = {
+            "success": True,
+            "progress_url": "https://fake-helper.test/progress?id=bad",
+            "title": "Bad Ad"
+        }
+
+        # Poll returns ad redirect url
+        mock_poll_resp = MagicMock()
+        mock_poll_resp.status_code = 200
+        mock_poll_resp.json.return_value = {
+            "success": 1,
+            "download_url": "https://ey43.com/ad/redirect",
+            "title": "Bad Ad"
+        }
+
+        def fake_get(url, *args, **kwargs):
+            if "download.php" in url:
+                return mock_init_resp
+            elif "progress?id=" in url:
+                return mock_poll_resp
+            return MagicMock(status_code=404)
+
+        with patch.dict(os.environ, {"TEST_HELPER": "1"}), \
+             patch("time.sleep", return_value=None), \
+             patch("downloader.requests.get", side_effect=fake_get):
+            
+            with tempfile.TemporaryDirectory() as td:
+                res = downloader.download_youtube_via_helper_sync(
+                    video_id="fake_ad",
+                    quality="720",
+                    task_dir=td
+                )
+                self.assertIsNone(res)
+
 
 if __name__ == "__main__":
     unittest.main()

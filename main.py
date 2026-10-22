@@ -745,11 +745,17 @@ async def process_youtube_url(message: types.Message, url: str):
 
 def make_upload_progress_callback(status_msg, prefix: str = "🚀 در حال ارسال فایل به تلگرام..."):
     """
-    Creates a non-blocking, rate-limited progress callback for high-speed MTProto uploads.
+    Creates a non-blocking, rate-limited progress callback for high-speed MTProto uploads and cloud downloads.
     Throttles message edits to at most once per 3.5 seconds to respect Telegram API rate limits.
+    Thread-safe: can be invoked seamlessly from both async loops and background worker threads.
     """
     last_edit = 0.0
     last_percent = -1
+    loop = None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
 
     async def _do_edit(text: str):
         try:
@@ -758,30 +764,38 @@ def make_upload_progress_callback(status_msg, prefix: str = "🚀 در حال ا
             pass
 
     def callback(current: int, total: int):
-        nonlocal last_edit, last_percent
+        nonlocal last_edit, last_percent, loop
         now = time.time()
-        if total <= 0:
-            return
-        percent = int(current * 100 / total)
-        if (now - last_edit >= 3.5 and percent != last_percent) or percent >= 100:
+        percent = int(current * 100 / total) if total > 0 else 0
+        if (now - last_edit >= 3.5 and percent != last_percent) or (total > 0 and percent >= 100):
             last_edit = now
             last_percent = percent
             cur_mb = current / (1024 * 1024)
-            tot_mb = total / (1024 * 1024)
-            bar_len = 10
-            filled = int(bar_len * percent / 100)
-            bar = "▰" * filled + "▱" * (bar_len - filled)
-            text = (
-                f"{prefix}\n\n"
-                f"📊 <b>پیشرفت آپلود:</b> {percent}%\n"
-                f"<code>[{bar}]</code>\n"
-                f"💾 <b>حجم:</b> {cur_mb:.1f} / {tot_mb:.1f} MB"
-            )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(_do_edit(text))
-            except RuntimeError:
-                pass
+            tot_mb = total / (1024 * 1024) if total > 0 else 0
+            if total > 0:
+                bar_len = 10
+                filled = max(0, min(bar_len, int(bar_len * percent / 100)))
+                bar = "▰" * filled + "▱" * (bar_len - filled)
+                text = (
+                    f"{prefix}\n\n"
+                    f"📊 <b>پیشرفت:</b> {percent}%\n"
+                    f"<code>[{bar}]</code>\n"
+                    f"💾 <b>حجم:</b> {cur_mb:.1f} / {tot_mb:.1f} MB"
+                )
+            else:
+                text = (
+                    f"{prefix}\n\n"
+                    f"⚡ <b>دریافت داده‌ها:</b> {cur_mb:.1f} MB\n"
+                    f"⏳ در حال استریم..."
+                )
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(_do_edit(text), loop)
+            else:
+                try:
+                    cur_loop = asyncio.get_running_loop()
+                    cur_loop.create_task(_do_edit(text))
+                except Exception:
+                    pass
 
     return callback
 
@@ -849,8 +863,20 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
 
         task_dir = None
         try:
+            raw_title = "YouTube Media"
+            short_title = f"{video_id}"
+            cached_info = await get_cached(f"yt_info_{video_id}")
+            if cached_info and cached_info.get("title"):
+                raw_title = cached_info.get("title")
+                short_title = (raw_title[:45] + "...") if len(raw_title) > 48 else raw_title
+
+            dl_cb = make_upload_progress_callback(
+                status_msg,
+                prefix=f"📥 <b>در حال دانلود از سرور پرسرعت...</b>\n🎬 <code>{html.escape(short_title)}</code>"
+            )
+
             async with DOWNLOAD_SEMAPHORE:
-                res = await download_youtube(video_id, quality)
+                res = await download_youtube(video_id, quality, progress_callback=dl_cb)
             task_dir = res.get("task_dir")
             file_path = res.get("file_path")
             thumb_file = res.get("thumbnail_path")

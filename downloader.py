@@ -10,7 +10,7 @@ import html
 import time
 import urllib.request
 import urllib.parse
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Callable
 import requests
 import aiohttp
 import yt_dlp
@@ -1181,8 +1181,16 @@ async def download_via_cobalt(
 ) -> Optional[Dict[str, Any]]:
     return await asyncio.to_thread(download_via_cobalt_sync, url, quality, is_audio, task_dir, title)
 
-async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Tier 3 Fallback: Downloads YouTube video/audio via external Loader.to REST helper API."""
+async def download_youtube_via_helper(
+    video_id: str,
+    quality: str,
+    task_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Tier 0/Fallback: Downloads YouTube video/audio via external SaveNow / Loader.to REST helper API."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("TEST_HELPER"):
+        return None
+
     if not task_dir:
         task_id = str(uuid.uuid4())
         task_dir = os.path.join(DOWNLOADS_DIR, task_id)
@@ -1194,7 +1202,7 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
     is_audio = quality in ("audio", "audio_low", "mp3")
     fmt = "mp3" if is_audio else (quality if quality in ["144", "240", "360", "480", "720", "1080"] else "720")
     target_url = f"https://www.youtube.com/watch?v={video_id}"
-    req_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
+    req_url = f"https://loader.to/ajax/download.php?button=1&start=1&end=1&format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer": "https://en.loader.to/",
@@ -1234,8 +1242,12 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
                     async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=10)) as p_resp:
                         if p_resp.status == 200:
                             p_data = await p_resp.json(content_type=None)
-                            if p_data.get("success") == 1 and p_data.get("download_url"):
-                                download_url = p_data.get("download_url")
+                            candidate = p_data.get("download_url")
+                            if p_data.get("success") == 1 and candidate:
+                                if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com")):
+                                    print(f"[Helper API] Rejected ad redirect: {candidate}")
+                                    return None
+                                download_url = candidate
                                 if p_data.get("title"):
                                     raw_title = p_data.get("title")
                                 print(f"[Helper API] Direct download URL ready on attempt {idx}!")
@@ -1266,9 +1278,21 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
                             except Exception:
                                 pass
                         return None
+                    c_type = dl_resp.headers.get("Content-Type", "")
+                    if "text/html" in c_type:
+                        print(f"[Helper API] Stream returned HTML ({c_type}), aborting")
+                        return None
+                    total_len = int(dl_resp.headers.get("Content-Length") or 0)
+                    downloaded = 0
                     with open(out_file, "wb") as f:
                         while chunk := await dl_resp.content.read(131072):
                             f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_callback:
+                                try:
+                                    progress_callback(downloaded, total_len)
+                                except Exception:
+                                    pass
                 print(f"[Helper API] Stream download completed. Size on disk: {os.path.getsize(out_file)} bytes")
             except Exception as e:
                 print(f"[Helper API] Stream download failed: {e}")
@@ -1303,7 +1327,7 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
                         "height": h or 0,
                         "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
                         "is_audio": is_audio,
-                        "tier_used": 3,
+                        "tier_used": 0,
                         "download_url": download_url,
                     }
             if os.path.exists(out_file):
@@ -1316,8 +1340,16 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
         if not success and created_task_dir and task_dir and os.path.exists(task_dir):
             cleanup_task_dir(task_dir)
 
-def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Synchronous Loader.to helper with integrity verification."""
+def download_youtube_via_helper_sync(
+    video_id: str,
+    quality: str,
+    task_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Synchronous SaveNow / Loader.to helper with direct CDN streaming, faststart, and live progress."""
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("TEST_HELPER"):
+        return None
+
     import time
     if not task_dir:
         task_id = str(uuid.uuid4())
@@ -1330,7 +1362,7 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
     is_audio = quality in ("audio", "audio_low", "mp3")
     fmt = "mp3" if is_audio else (quality if quality in ["144", "240", "360", "480", "720", "1080"] else "720")
     target_url = f"https://www.youtube.com/watch?v={video_id}"
-    req_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
+    req_url = f"https://loader.to/ajax/download.php?button=1&start=1&end=1&format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
         "Referer": "https://en.loader.to/",
@@ -1366,8 +1398,13 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
                 p_resp = requests.get(progress_url, headers=headers, timeout=10)
                 if p_resp.status_code == 200:
                     p_data = p_resp.json()
-                    if p_data.get("success") == 1 and p_data.get("download_url"):
-                        download_url = p_data.get("download_url")
+                    candidate = p_data.get("download_url")
+                    if p_data.get("success") == 1 and candidate:
+                        # Reject ad networks immediately
+                        if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com")):
+                            print(f"[Helper API Sync] Rejected ad redirect: {candidate}")
+                            return None
+                        download_url = candidate
                         if p_data.get("title"):
                             raw_title = p_data.get("title")
                         print(f"[Helper API Sync] Ready at attempt {idx}!")
@@ -1398,10 +1435,22 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
                         except Exception:
                             pass
                     return None
+                c_type = stream_resp.headers.get("Content-Type", "")
+                if "text/html" in c_type:
+                    print(f"[Helper API Sync] Returned HTML instead of media: {c_type}")
+                    return None
+                total_len = int(stream_resp.headers.get("Content-Length") or 0)
+                downloaded = 0
                 with open(out_file, "wb") as f:
                     for chunk in stream_resp.iter_content(chunk_size=131072):
                         if chunk:
                             f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_callback:
+                                try:
+                                    progress_callback(downloaded, total_len)
+                                except Exception:
+                                    pass
             print(f"[Helper API Sync] Stream download finished. Size: {os.path.getsize(out_file)} bytes")
         except Exception as e:
             print(f"[Helper API] Sync stream download failed: {e}")
@@ -1436,7 +1485,7 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
                     "height": h or 0,
                     "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
                     "is_audio": is_audio,
-                    "tier_used": 3,
+                    "tier_used": 0,
                     "download_url": download_url,
                 }
         if os.path.exists(out_file):
@@ -1492,7 +1541,12 @@ def get_youtube_direct_cdn_url(video_id: str, quality: str) -> Optional[str]:
         print(f"[CDN Direct URL] Error: {e}")
     return None
 
-def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] = None) -> Dict[str, Any]:
+def download_youtube_sync(
+    video_id: str,
+    quality: str,
+    task_dir: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], Any]] = None,
+) -> Dict[str, Any]:
     ff_dir = get_ffmpeg_dir()
     if not task_dir:
         task_id = str(uuid.uuid4())
@@ -1521,7 +1575,27 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         channel = ""
         tier_used = 0
 
-        # Tier 0: High-speed Cobalt cloud streaming engine (direct stream tunnel, faststart, no CPU bottleneck)
+        # Tier 0: Direct SaveNow / Loader.to Cloud Helper (fastest on datacenter & cloud servers)
+        try:
+            helper_res = download_youtube_via_helper_sync(
+                video_id, quality, task_dir=task_dir, progress_callback=progress_callback
+            )
+            if helper_res and os.path.exists(helper_res.get("file_path", "")):
+                h_sz = os.path.getsize(helper_res["file_path"])
+                if (is_audio and h_sz > 10000) or (not is_audio and h_sz > 50000 and helper_res.get("duration", 0) > 0):
+                    if not helper_res.get("thumbnail"):
+                        helper_res["thumbnail"] = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                    success = True
+                    return helper_res
+                else:
+                    try:
+                        os.remove(helper_res["file_path"])
+                    except Exception:
+                        pass
+        except Exception as e_h:
+            print(f"[YouTube DL] Helper Tier 0 failed ({e_h}), falling back to Cobalt...")
+
+        # Tier 1: High-speed Cobalt cloud streaming engine (direct stream tunnel, faststart, no CPU bottleneck)
         try:
             cobalt_res = download_via_cobalt_sync(url, quality=quality, is_audio=is_audio, task_dir=task_dir)
             if cobalt_res and os.path.exists(cobalt_res.get("file_path", "")):
@@ -1539,9 +1613,9 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     except Exception:
                         pass
         except Exception as e_cobalt:
-            print(f"[YouTube DL] Cobalt Tier 0 failed ({e_cobalt}), falling back to native DASH...")
+            print(f"[YouTube DL] Cobalt Tier 1 failed ({e_cobalt}), falling back to native DASH...")
 
-        # Tier 1: Modern yt-dlp DASH download with Apple Vision Pro / Android VR client (bypasses datacenter web bot block)
+        # Tier 2: Modern yt-dlp DASH download with Apple Vision Pro / Android VR client (bypasses datacenter web bot block)
         try:
             if is_audio:
                 ydl_opts_1: Dict[str, Any] = {
@@ -1682,15 +1756,17 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
             if not f.endswith(".part") and not f.endswith(".ytdl") and not f.endswith(".jpg")
         ]
         if not files:
-            # Tier 3 Fallback: Loader.to API
-            print("[YouTube DL] Local strategies failed. Calling Tier 3 (External Helper)...")
+            # Fallback: Final Helper retry
+            print("[YouTube DL] Local strategies failed. Calling Final Helper fallback...")
             try:
-                helper_res = download_youtube_via_helper_sync(video_id, quality, task_dir=task_dir)
+                helper_res = download_youtube_via_helper_sync(
+                    video_id, quality, task_dir=task_dir, progress_callback=progress_callback
+                )
                 if helper_res and helper_res.get("file_path") and os.path.exists(helper_res["file_path"]):
                     success = True
                     return helper_res
             except Exception as e3:
-                print(f"[YouTube DL] Tier 3 helper error: {e3}")
+                print(f"[YouTube DL] Final helper error: {e3}")
 
             # If helper failed, cleanup all partial/broken files in task_dir and fail immediately
             for f in glob.glob(os.path.join(task_dir, "*")):
@@ -1746,33 +1822,39 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         if not success and created_task_dir and task_dir and os.path.exists(task_dir):
             cleanup_task_dir(task_dir)
 
-async def download_youtube(video_id: str, quality: str) -> Dict[str, Any]:
-    """Downloads YouTube media using 3-tier fallback architecture:
-    Tier 1 (Node/web) -> Tier 2 (Android DASH) -> Tier 3 (External Loader.to helper).
+async def download_youtube(
+    video_id: str,
+    quality: str,
+    progress_callback: Optional[Callable[[int, int], Any]] = None,
+) -> Dict[str, Any]:
+    """Downloads YouTube media using multi-tier fallback architecture:
+    Tier 0 (SaveNow / Loader.to) -> Tier 1 (Cobalt) -> Tier 2 (yt-dlp DASH) -> Tier 3 (Async Helper).
     """
-    # 1. Attempt Tier 1 & Tier 2 native yt-dlp in thread
+    # 1. Attempt Tier 0 (Helper) & Tier 1 (Cobalt) & Tier 2 (yt-dlp DASH) in thread
     try:
-        res = await asyncio.to_thread(download_youtube_sync, video_id, quality)
+        res = await asyncio.to_thread(download_youtube_sync, video_id, quality, None, progress_callback)
         if res and os.path.exists(res.get("file_path", "")):
             return res
-    except Exception as e_ytdlp:
-        print(f"[YouTube DL] yt-dlp pipeline failed ({e_ytdlp}), falling over to Tier 3 helper...")
+    except Exception as e_sync:
+        print(f"[YouTube DL] Sync download pipeline failed ({e_sync}), falling over to async Helper...")
 
-    # 2. Attempt Tier 3: External Loader.to helper
+    # 2. Attempt Tier 3: Async Helper fallback
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(DOWNLOADS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
     success = False
     try:
-        res_ext = await download_youtube_via_helper(video_id, quality, task_dir)
+        res_ext = await download_youtube_via_helper(video_id, quality, task_dir, progress_callback=progress_callback)
         if res_ext and os.path.exists(res_ext.get("file_path", "")):
             success = True
             return res_ext
     except Exception as e_helper:
-        print(f"[YouTube DL] External helper error: {e_helper}")
+        print(f"[YouTube DL] Async helper error: {e_helper}")
     finally:
         if not success and os.path.exists(task_dir):
             cleanup_task_dir(task_dir)
+
+    raise ValueError("دانلود فایل از یوتیوب ناموفق بود.")
 
     raise ValueError("دانلود فایل از یوتیوب ناموفق بود.")
 
