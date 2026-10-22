@@ -317,7 +317,6 @@ async def send_mtproto_video(
                 h=h,
                 supports_streaming=True,
             ),
-            DocumentAttributeFilename(file_name=filename),
         ]
 
         thumb_path = thumb if (thumb and os.path.exists(thumb)) else None

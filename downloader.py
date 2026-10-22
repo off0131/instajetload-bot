@@ -977,7 +977,10 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
     fmt = "mp3" if quality in ("audio", "mp3") else (quality if quality in ["360", "480", "720", "1080"] else "720")
     target_url = f"https://www.youtube.com/watch?v={video_id}"
     req_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Referer": "https://en.loader.to/",
+    }
 
     success = False
     try:
@@ -1076,7 +1079,10 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
     fmt = "mp3" if quality in ("audio", "mp3") else (quality if quality in ["360", "480", "720", "1080"] else "720")
     target_url = f"https://www.youtube.com/watch?v={video_id}"
     req_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        "Referer": "https://en.loader.to/",
+    }
 
     success = False
     try:
