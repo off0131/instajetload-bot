@@ -654,7 +654,7 @@ async def process_youtube_url(message: types.Message, url: str):
             qualities_data = info.get("qualities_data") or {}
             v_quals = qualities_data.get("video_qualities") or []
 
-            if not duration and video_id:
+            if (not duration or not any("·" in q.get("label", "") for q in v_quals)) and video_id:
                 try:
                     from downloader import fetch_youtube_web_info
                     w_info = fetch_youtube_web_info(video_id)
@@ -663,10 +663,22 @@ async def process_youtube_url(message: types.Message, url: str):
                         info["duration"] = duration
                         qualities_data = parse_youtube_qualities({"duration": duration, "formats": []})
                         v_quals = qualities_data.get("video_qualities") or []
+                    if w_info.get("title") and (not title or title == "YouTube Video"):
+                        title = w_info["title"]
+                    if w_info.get("channel") and (not channel or channel == "YouTube"):
+                        channel = w_info["channel"]
                 except Exception:
                     pass
 
-            dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "0:00"
+            if duration >= 3600:
+                h = duration // 3600
+                m = (duration % 3600) // 60
+                s = duration % 60
+                dur_str = f"{h}:{m:02d}:{s:02d}"
+            elif duration > 0:
+                dur_str = f"{duration // 60}:{duration % 60:02d}"
+            else:
+                dur_str = "0:00"
             channel = info.get("channel", "YouTube")
             resolutions = info.get("resolutions") or [720, 480, 360]
 
@@ -815,6 +827,12 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 height_val = height_val or h_chk or 720
 
             if not is_audio and (not dur_val or dur_val <= 0):
+                w_ff, h_ff, dur_ff = probe_with_ffmpeg(file_path)
+                dur_val = dur_ff or dur_val
+                width_val = width_val or w_ff or 1280
+                height_val = height_val or h_ff or 720
+
+            if not is_audio and (not dur_val or dur_val <= 0):
                 try:
                     from downloader import fetch_youtube_web_info
                     w_info = fetch_youtube_web_info(video_id)
@@ -824,7 +842,7 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                     pass
 
             if not is_audio and (not dur_val or dur_val <= 0):
-                dur_val = 1  # Safe fallback to guarantee playback without failing request
+                dur_val = 0
 
             if file_size_mb > 49.5:
                 # MTProto direct delivery up to 2,000 MB (2 GB)

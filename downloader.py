@@ -84,6 +84,21 @@ def get_ffmpeg_bin() -> Optional[str]:
         pass
     return None
 
+def get_node_bin() -> Optional[str]:
+    """Finds node / nodejs binary across common environments (Homebrew, Linux, Docker, Conda)."""
+    candidates = [
+        shutil.which("node"),
+        shutil.which("nodejs"),
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+        "/usr/bin/node",
+        "/usr/bin/nodejs",
+    ]
+    for c in candidates:
+        if c and os.path.exists(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
 def ensure_cookies_file() -> Optional[str]:
     """Ensures cookies file is ready from Render Secret Files, Env Var, or local file."""
     render_secrets_path = "/etc/secrets/cookies.txt"
@@ -648,7 +663,36 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
 
     # 2. Ensure MP4 format and faststart moov atom at byte 0 for instant playback
     ext = os.path.splitext(file_path)[1].lower()
-    if ext != ".mp4" and os.path.getsize(file_path) > 10000:
+
+    # Check video codec to guarantee native Telegram in-app playback without launching external players
+    codec = ""
+    try:
+        p = subprocess.run([ff_bin, "-i", file_path], stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True, timeout=15)
+        m = re.search(r"Stream.*Video:\s*([a-zA-Z0-9_-]+)", p.stderr)
+        if m:
+            codec = m.group(1).lower()
+    except Exception:
+        pass
+
+    needs_transcode = codec in ("vp9", "av1", "av01", "hevc", "h265", "vp8")
+    if needs_transcode and os.path.getsize(file_path) > 10000:
+        target_mp4 = os.path.join(task_dir, f"{base_name}_h264.mp4")
+        try:
+            res = subprocess.run(
+                [ff_bin, "-y", "-i", file_path, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-movflags", "+faststart", target_mp4],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=300,
+            )
+            if res.returncode == 0 and os.path.exists(target_mp4) and os.path.getsize(target_mp4) > 1024:
+                try:
+                    os.remove(file_path)
+                except Exception:
+                    pass
+                file_path = target_mp4
+        except Exception as e:
+            print(f"Transcode to H.264 note: {e}")
+    elif ext != ".mp4" and os.path.getsize(file_path) > 10000:
         target_mp4 = os.path.join(task_dir, f"{base_name}.mp4")
         try:
             res = subprocess.run(
@@ -844,7 +888,7 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
     clean_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
     proxy = os.environ.get("YOUTUBE_PROXY") or os.environ.get("HTTP_PROXY") or None
     yt_cookies = get_youtube_cookies_file()
-    node_bin = shutil.which("node")
+    node_bin = get_node_bin()
 
     # Attempt 1: Modern yt-dlp format extraction
     try:
@@ -901,6 +945,8 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
             "socket_timeout": 30,
             "extractor_args": {"youtube": {"player_client": ["android"]}},
         }
+        if node_bin:
+            ydl_opts_android["js_runtimes"] = {"node": {"path": node_bin}}
         if ff_dir:
             ydl_opts_android["ffmpeg_location"] = ff_dir
         if proxy:
@@ -974,7 +1020,8 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
     else:
         created_task_dir = False
 
-    fmt = "mp3" if quality in ("audio", "mp3") else (quality if quality in ["360", "480", "720", "1080"] else "720")
+    is_audio = quality in ("audio", "audio_low", "mp3")
+    fmt = "mp3" if is_audio else (quality if quality in ["144", "240", "360", "480", "720", "1080"] else "720")
     target_url = f"https://www.youtube.com/watch?v={video_id}"
     req_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
     headers = {
@@ -1022,28 +1069,32 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
             if not download_url:
                 return None
 
-            ext = "mp3" if quality in ("audio", "mp3") else "mp4"
+            ext = "mp3" if is_audio else "mp4"
             clean_name = re.sub(r'[\\/*?:"<>|]', "", raw_title)[:60].strip() or "video"
             out_file = os.path.join(task_dir, f"{clean_name}.{ext}")
 
             try:
-                async with session.get(download_url, timeout=aiohttp.ClientTimeout(total=600, sock_read=60)) as dl_resp:
+                async with session.get(download_url, timeout=aiohttp.ClientTimeout(total=1800, sock_read=60)) as dl_resp:
                     if dl_resp.status != 200:
                         return None
                     with open(out_file, "wb") as f:
-                        while chunk := await dl_resp.content.read(65536):
+                        while chunk := await dl_resp.content.read(131072):
                             f.write(chunk)
             except Exception as e:
                 print(f"[Helper API] Stream download failed: {e}")
                 return None
 
             if os.path.exists(out_file) and os.path.getsize(out_file) > 50000:
-                is_audio = quality in ("audio", "mp3")
                 thumb_path = None
                 if not is_audio:
                     out_file, thumb_path = prepare_video_for_streaming(out_file)
                 w, h, dur = get_media_dimensions(out_file)
-                if is_audio or (dur and dur > 0):
+                if not is_audio and (not dur or dur <= 0):
+                    w_ff, h_ff, dur_ff = probe_with_ffmpeg(out_file)
+                    dur = dur_ff or dur
+                    w = w or w_ff
+                    h = h or h_ff
+                if is_audio or (dur and dur > 3):
                     success = True
                     return {
                         "task_dir": task_dir,
@@ -1076,7 +1127,8 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
     else:
         created_task_dir = False
 
-    fmt = "mp3" if quality in ("audio", "mp3") else (quality if quality in ["360", "480", "720", "1080"] else "720")
+    is_audio = quality in ("audio", "audio_low", "mp3")
+    fmt = "mp3" if is_audio else (quality if quality in ["144", "240", "360", "480", "720", "1080"] else "720")
     target_url = f"https://www.youtube.com/watch?v={video_id}"
     req_url = f"https://loader.to/ajax/download.php?format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
     headers = {
@@ -1122,16 +1174,16 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
         if not download_url:
             return None
 
-        ext = "mp3" if quality in ("audio", "mp3") else "mp4"
+        ext = "mp3" if is_audio else "mp4"
         clean_name = re.sub(r'[\\/*?:"<>|]', "", raw_title)[:60].strip() or "video"
         out_file = os.path.join(task_dir, f"{clean_name}.{ext}")
 
         try:
-            with requests.get(download_url, headers=headers, stream=True, timeout=(15, 600)) as stream_resp:
+            with requests.get(download_url, headers=headers, stream=True, timeout=(20, 1800)) as stream_resp:
                 if stream_resp.status_code != 200:
                     return None
                 with open(out_file, "wb") as f:
-                    for chunk in stream_resp.iter_content(chunk_size=65536):
+                    for chunk in stream_resp.iter_content(chunk_size=131072):
                         if chunk:
                             f.write(chunk)
         except Exception as e:
@@ -1139,12 +1191,16 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
             return None
 
         if os.path.exists(out_file) and os.path.getsize(out_file) > 50000:
-            is_audio = quality in ("audio", "mp3")
             thumb_path = None
             if not is_audio:
                 out_file, thumb_path = prepare_video_for_streaming(out_file)
             w, h, dur = get_media_dimensions(out_file)
-            if is_audio or (dur and dur > 0):
+            if not is_audio and (not dur or dur <= 0):
+                w_ff, h_ff, dur_ff = probe_with_ffmpeg(out_file)
+                dur = dur_ff or dur
+                w = w or w_ff
+                h = h or h_ff
+            if is_audio or (dur and dur > 3):
                 success = True
                 return {
                     "task_dir": task_dir,
@@ -1225,7 +1281,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         outtmpl = os.path.join(task_dir, "%(title)s.%(ext)s")
         proxy = os.environ.get("YOUTUBE_PROXY") or os.environ.get("HTTP_PROXY") or None
         yt_cookies = get_youtube_cookies_file()
-        node_bin = shutil.which("node")
+        node_bin = get_node_bin()
 
         is_audio = quality in ("audio", "audio_low", "mp3")
         media_type = "audio" if is_audio else "video"
@@ -1249,38 +1305,42 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                         "preferredcodec": "mp3",
                         "preferredquality": audio_bitrate,
                     }],
-                    "retries": 5,
-                    "fragment_retries": 5,
-                    "concurrent_fragment_downloads": 8,
-                    "buffersize": 1048576,
-                    "http_chunk_size": 10485760,
+                    "retries": 10,
+                    "fragment_retries": 10,
+                    "concurrent_fragment_downloads": 16,
+                    "buffersize": 2097152,
+                    "http_chunk_size": 20971520,
                     "quiet": True,
                     "no_warnings": True,
                     "nocheckcertificate": True,
-                    "socket_timeout": 45,
+                    "socket_timeout": 60,
                 }
             else:
                 fmt_1 = (
+                    f"bv*[height<={q_int}][vcodec^=avc1]+ba[acodec^=mp4a]/"
+                    f"bv*[height<={q_int}][vcodec^=avc]+ba[ext=m4a]/"
+                    f"bv*[height<={q_int}][vcodec^=avc]+ba/"
                     f"bv*[height<={q_int}][ext=mp4]+ba[ext=m4a]/"
-                    f"bv*[height<={q_int}][vcodec^=avc]+ba[acodec^=mp4a]/"
                     f"bv*[height<={q_int}]+ba/"
+                    f"b[height<={q_int}][ext=mp4]/"
                     f"b[height<={q_int}]/"
                     f"best"
                 )
                 ydl_opts_1 = {
                     "format": fmt_1,
+                    "format_sort": ["vcodec:h264"],
                     "outtmpl": outtmpl,
                     "merge_output_format": "mp4",
                     "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart"]},
-                    "retries": 5,
-                    "fragment_retries": 5,
-                    "concurrent_fragment_downloads": 8,
-                    "buffersize": 1048576,
-                    "http_chunk_size": 10485760,
+                    "retries": 10,
+                    "fragment_retries": 10,
+                    "concurrent_fragment_downloads": 16,
+                    "buffersize": 2097152,
+                    "http_chunk_size": 20971520,
                     "quiet": True,
                     "no_warnings": True,
                     "nocheckcertificate": True,
-                    "socket_timeout": 45,
+                    "socket_timeout": 60,
                 }
 
             if node_bin:
@@ -1302,7 +1362,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         except Exception as e1:
             print(f"[YouTube DL] Strategy 1 note: {e1}, failing over to Strategy 2 (android)...")
 
-        # Tier 2: Android client DASH (bypasses datacenter web bot guard)
+        # Tier 2: Alternative client DASH (bypasses datacenter web bot guard)
         if not downloaded:
             try:
                 if is_audio:
@@ -1314,41 +1374,45 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                             "preferredcodec": "mp3",
                             "preferredquality": audio_bitrate,
                         }],
-                        "retries": 5,
-                        "fragment_retries": 5,
-                        "concurrent_fragment_downloads": 8,
-                        "buffersize": 1048576,
-                        "http_chunk_size": 10485760,
+                        "retries": 10,
+                        "fragment_retries": 10,
+                        "concurrent_fragment_downloads": 16,
+                        "buffersize": 2097152,
+                        "http_chunk_size": 20971520,
                         "quiet": True,
                         "no_warnings": True,
                         "nocheckcertificate": True,
-                        "socket_timeout": 45,
-                        "extractor_args": {"youtube": {"player_client": ["android"]}},
+                        "socket_timeout": 60,
+                        "extractor_args": {"youtube": {"player_client": ["android_vr", "web"]}},
                     }
                 else:
                     fmt_2 = (
-                        f"bv*[height<={q_int}][ext=mp4]+ba[ext=m4a]/"
-                        f"bv*[height<={q_int}][vcodec^=avc]+ba[acodec^=mp4a]/"
+                        f"bv*[height<={q_int}][vcodec^=avc1]+ba[acodec^=mp4a]/"
+                        f"bv*[height<={q_int}][vcodec^=avc]+ba[ext=m4a]/"
+                        f"bv*[height<={q_int}][vcodec^=avc]+ba/"
                         f"bv*[height<={q_int}]+ba/"
                         f"b[height<={q_int}]/"
                         f"18/best"
                     )
                     ydl_opts_2 = {
                         "format": fmt_2,
+                        "format_sort": ["vcodec:h264"],
                         "outtmpl": outtmpl,
                         "merge_output_format": "mp4",
                         "postprocessor_args": {"Merger": ["-c:v", "copy", "-c:a", "aac", "-movflags", "+faststart"]},
-                        "retries": 5,
-                        "fragment_retries": 5,
-                        "concurrent_fragment_downloads": 8,
-                        "buffersize": 1048576,
-                        "http_chunk_size": 10485760,
+                        "retries": 10,
+                        "fragment_retries": 10,
+                        "concurrent_fragment_downloads": 16,
+                        "buffersize": 2097152,
+                        "http_chunk_size": 20971520,
                         "quiet": True,
                         "no_warnings": True,
                         "nocheckcertificate": True,
-                        "socket_timeout": 45,
-                        "extractor_args": {"youtube": {"player_client": ["android"]}},
+                        "socket_timeout": 60,
+                        "extractor_args": {"youtube": {"player_client": ["android_vr", "web"]}},
                     }
+                if node_bin:
+                    ydl_opts_2["js_runtimes"] = {"node": {"path": node_bin}}
                 if ff_dir:
                     ydl_opts_2["ffmpeg_location"] = ff_dir
                 if proxy:
@@ -1374,11 +1438,8 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
             try:
                 helper_res = download_youtube_via_helper_sync(video_id, quality, task_dir=task_dir)
                 if helper_res and helper_res.get("file_path") and os.path.exists(helper_res["file_path"]):
-                    h_file = helper_res["file_path"]
-                    w_h, h_h, dur_h = get_media_dimensions(h_file)
-                    if is_audio or (dur_h and dur_h > 0):
-                        success = True
-                        return helper_res
+                    success = True
+                    return helper_res
             except Exception as e3:
                 print(f"[YouTube DL] Tier 3 helper error: {e3}")
 

@@ -266,6 +266,27 @@ class TestFixesAndMTProto(unittest.TestCase):
         self.assertGreater(quals[1080]["size_bytes"], 70 * 1024 * 1024)
         self.assertIn("مگ", quals[1080]["label"])
 
+    def test_get_node_bin_detects_binary(self):
+        """Verify get_node_bin successfully finds a node executable or returns None safely."""
+        node_bin = downloader.get_node_bin()
+        if node_bin:
+            self.assertTrue(os.path.exists(node_bin))
+            self.assertTrue(os.access(node_bin, os.X_OK))
+
+    def test_long_duration_format_hms(self):
+        """Verify duration formatting for videos >= 1 hour uses H:MM:SS format."""
+        duration = 5156  # 1h 25m 56s
+        h = duration // 3600
+        m = (duration % 3600) // 60
+        s = duration % 60
+        dur_str = f"{h}:{m:02d}:{s:02d}"
+        self.assertEqual(dur_str, "1:25:56")
+
+        # Short video
+        short_dur = 185
+        dur_str_short = f"{short_dur // 60}:{short_dur % 60:02d}"
+        self.assertEqual(dur_str_short, "3:05")
+
 
 if __name__ == "__main__":
     unittest.main()

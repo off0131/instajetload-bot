@@ -300,13 +300,16 @@ async def send_mtproto_video(
         # Auto-resolve dimensions if missing/zero
         if dur <= 0 or w <= 0 or h <= 0:
             try:
-                from downloader import get_media_dimensions
+                from downloader import get_media_dimensions, probe_with_ffmpeg
                 w_chk, h_chk, dur_chk = get_media_dimensions(file_path)
-                dur = dur or dur_chk or 1
+                dur = dur or dur_chk or 0
                 w = w or w_chk or 1280
                 h = h or h_chk or 720
+                if dur <= 0:
+                    _, _, dur_ff = probe_with_ffmpeg(file_path)
+                    dur = dur or dur_ff or 0
             except Exception:
-                dur = dur or 1
+                dur = dur or 0
                 w = w or 1280
                 h = h or 720
 
