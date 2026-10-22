@@ -832,17 +832,10 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                 width_val = width_val or w_ff or 1280
                 height_val = height_val or h_ff or 720
 
-            if not is_audio and (not dur_val or dur_val <= 0):
-                try:
-                    from downloader import fetch_youtube_web_info
-                    w_info = fetch_youtube_web_info(video_id)
-                    if w_info.get("duration"):
-                        dur_val = int(w_info["duration"])
-                except Exception:
-                    pass
-
-            if not is_audio and (not dur_val or dur_val <= 0):
-                dur_val = 0
+            # Guard against delivering corrupt, truncated, or unplayable video to Telegram
+            if not is_audio and (dur_val <= 0 or file_size_mb < 0.05):
+                logger.error(f"Downloaded video file {file_path} is corrupt or unplayable (dur={dur_val}, size={file_size_mb:.2f}MB)")
+                raise ValueError("فایل ویدیو ناقص یا آسیب‌دیده است و امکان پخش ندارد.")
 
             if file_size_mb > 49.5:
                 # MTProto direct delivery up to 2,000 MB (2 GB)

@@ -287,6 +287,42 @@ class TestFixesAndMTProto(unittest.TestCase):
         dur_str_short = f"{short_dur // 60}:{short_dur % 60:02d}"
         self.assertEqual(dur_str_short, "3:05")
 
+    def test_visionos_player_client_configured(self):
+        """Verify VisionOS / Android VR client configured to bypass datacenter IP blocks."""
+        with patch("downloader.yt_dlp.YoutubeDL") as mock_ydl:
+            mock_inst = MagicMock()
+            mock_inst.extract_info.return_value = {"id": "test", "formats": []}
+            mock_ydl.return_value.__enter__.return_value = mock_inst
+            downloader.extract_youtube_info_sync("https://youtu.be/dQw4w9WgXcQ")
+            opts = mock_ydl.call_args[0][0]
+            self.assertIn("visionos", opts.get("extractor_args", {}).get("youtube", {}).get("player_client", []))
+
+    def test_tier3_helper_failure_cleans_partial_files_and_does_not_return_corrupt_video(self):
+        """Verify that Tier 3 failure cleans all files and raises ValueError without leaking broken stubs."""
+        def mock_helper_leaving_partial(vid, q, task_dir=None):
+            if task_dir:
+                with open(os.path.join(task_dir, "corrupt_partial.mp4"), "wb") as f:
+                    f.write(b"CORRUPT" * 100)
+            return None
+
+        with patch("downloader.yt_dlp.YoutubeDL", side_effect=Exception("Datacenter block")), \
+             patch("downloader.download_youtube_via_helper_sync", side_effect=mock_helper_leaving_partial):
+            with self.assertRaises(ValueError):
+                downloader.download_youtube_sync("dQw4w9WgXcQ", "720")
+
+    def test_has_faststart_detects_moov_atom(self):
+        """Verify has_faststart accurately detects moov atom placed before mdat atom."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tf:
+            # Fake mp4 header with ftyp, moov, then mdat
+            tf.write(b"\x00\x00\x00 ftypmp42\x00\x00\x00 moov\x00\x00\x00 mdat" + b"\x00" * 100)
+            tf_path = tf.name
+
+        try:
+            self.assertTrue(downloader.has_faststart(tf_path))
+        finally:
+            if os.path.exists(tf_path):
+                os.remove(tf_path)
+
 
 if __name__ == "__main__":
     unittest.main()

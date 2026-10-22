@@ -624,6 +624,19 @@ def cleanup_task_dir(task_dir: str):
     except Exception as e:
         print(f"Error cleaning task dir {task_dir}: {e}")
 
+def has_faststart(path: str) -> bool:
+    """Quickly checks if MP4 moov atom is located before mdat atom for faststart streaming."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(4096)
+            moov_pos = header.find(b"moov")
+            mdat_pos = header.find(b"mdat")
+            if moov_pos != -1 and (mdat_pos == -1 or moov_pos < mdat_pos):
+                return True
+    except Exception:
+        pass
+    return False
+
 def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
     """
     Ensures instant Telegram streaming and live preview:
@@ -710,18 +723,19 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
         except Exception as e:
             print(f"Remux to MP4 faststart note: {e}")
     elif file_path.endswith(".mp4") and os.path.getsize(file_path) > 10000:
-        fast_path = os.path.join(task_dir, f"{base_name}_fast.mp4")
-        try:
-            res = subprocess.run(
-                [ff_bin, "-y", "-i", file_path, "-c", "copy", "-movflags", "+faststart", fast_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=180,
-            )
-            if res.returncode == 0 and os.path.exists(fast_path) and os.path.getsize(fast_path) > 1024:
-                os.replace(fast_path, file_path)
-        except Exception as e:
-            print(f"Faststart optimization failed: {e}")
+        if not has_faststart(file_path):
+            fast_path = os.path.join(task_dir, f"{base_name}_fast.mp4")
+            try:
+                res = subprocess.run(
+                    [ff_bin, "-y", "-i", file_path, "-c", "copy", "-movflags", "+faststart", fast_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=180,
+                )
+                if res.returncode == 0 and os.path.exists(fast_path) and os.path.getsize(fast_path) > 1024:
+                    os.replace(fast_path, file_path)
+            except Exception as e:
+                print(f"Faststart optimization failed: {e}")
 
     real_thumb = thumb_path if (os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0) else None
     return file_path, real_thumb
@@ -890,7 +904,7 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
     yt_cookies = get_youtube_cookies_file()
     node_bin = get_node_bin()
 
-    # Attempt 1: Modern yt-dlp format extraction
+    # Attempt 1: Modern yt-dlp format extraction with VisionOS/Android VR client (bypasses datacenter bot blocks)
     try:
         ydl_opts_1: Dict[str, Any] = {
             "quiet": True,
@@ -898,6 +912,7 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
             "extract_flat": False,
             "nocheckcertificate": True,
             "socket_timeout": 30,
+            "extractor_args": {"youtube": {"player_client": ["visionos", "android_vr"]}},
         }
         if node_bin:
             ydl_opts_1["js_runtimes"] = {"node": {"path": node_bin}}
@@ -1076,12 +1091,22 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
             try:
                 async with session.get(download_url, timeout=aiohttp.ClientTimeout(total=1800, sock_read=60)) as dl_resp:
                     if dl_resp.status != 200:
+                        if os.path.exists(out_file):
+                            try:
+                                os.remove(out_file)
+                            except Exception:
+                                pass
                         return None
                     with open(out_file, "wb") as f:
                         while chunk := await dl_resp.content.read(131072):
                             f.write(chunk)
             except Exception as e:
                 print(f"[Helper API] Stream download failed: {e}")
+                if os.path.exists(out_file):
+                    try:
+                        os.remove(out_file)
+                    except Exception:
+                        pass
                 return None
 
             if os.path.exists(out_file) and os.path.getsize(out_file) > 50000:
@@ -1111,6 +1136,11 @@ async def download_youtube_via_helper(video_id: str, quality: str, task_dir: Opt
                         "tier_used": 3,
                         "download_url": download_url,
                     }
+            if os.path.exists(out_file):
+                try:
+                    os.remove(out_file)
+                except Exception:
+                    pass
             return None
     finally:
         if not success and created_task_dir and task_dir and os.path.exists(task_dir):
@@ -1181,6 +1211,11 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
         try:
             with requests.get(download_url, headers=headers, stream=True, timeout=(20, 1800)) as stream_resp:
                 if stream_resp.status_code != 200:
+                    if os.path.exists(out_file):
+                        try:
+                            os.remove(out_file)
+                        except Exception:
+                            pass
                     return None
                 with open(out_file, "wb") as f:
                     for chunk in stream_resp.iter_content(chunk_size=131072):
@@ -1188,6 +1223,11 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
                             f.write(chunk)
         except Exception as e:
             print(f"[Helper API] Sync stream download failed: {e}")
+            if os.path.exists(out_file):
+                try:
+                    os.remove(out_file)
+                except Exception:
+                    pass
             return None
 
         if os.path.exists(out_file) and os.path.getsize(out_file) > 50000:
@@ -1217,6 +1257,11 @@ def download_youtube_via_helper_sync(video_id: str, quality: str, task_dir: Opti
                     "tier_used": 3,
                     "download_url": download_url,
                 }
+        if os.path.exists(out_file):
+            try:
+                os.remove(out_file)
+            except Exception:
+                pass
         return None
     finally:
         if not success and created_task_dir and task_dir and os.path.exists(task_dir):
@@ -1294,11 +1339,11 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
         channel = ""
         tier_used = 0
 
-        # Tier 1: Modern yt-dlp DASH download with Node JS runtime if available
+        # Tier 1: Modern yt-dlp DASH download with Apple Vision Pro / Android VR client (bypasses datacenter web bot block)
         try:
             if is_audio:
                 ydl_opts_1: Dict[str, Any] = {
-                    "format": "ba/b",
+                    "format": "ba[acodec^=mp4a]/ba/b",
                     "outtmpl": outtmpl,
                     "postprocessors": [{
                         "key": "FFmpegExtractAudio",
@@ -1314,6 +1359,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     "no_warnings": True,
                     "nocheckcertificate": True,
                     "socket_timeout": 60,
+                    "extractor_args": {"youtube": {"player_client": ["visionos", "android_vr"]}},
                 }
             else:
                 fmt_1 = (
@@ -1341,6 +1387,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     "no_warnings": True,
                     "nocheckcertificate": True,
                     "socket_timeout": 60,
+                    "extractor_args": {"youtube": {"player_client": ["visionos", "android_vr"]}},
                 }
 
             if node_bin:
@@ -1360,7 +1407,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                 downloaded = True
                 tier_used = 1
         except Exception as e1:
-            print(f"[YouTube DL] Strategy 1 note: {e1}, failing over to Strategy 2 (android)...")
+            print(f"[YouTube DL] Strategy 1 note: {e1}, failing over to Strategy 2 (android_vr)...")
 
         # Tier 2: Alternative client DASH (bypasses datacenter web bot guard)
         if not downloaded:
@@ -1383,7 +1430,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                         "no_warnings": True,
                         "nocheckcertificate": True,
                         "socket_timeout": 60,
-                        "extractor_args": {"youtube": {"player_client": ["android_vr", "web"]}},
+                        "extractor_args": {"youtube": {"player_client": ["android_vr", "visionos"]}},
                     }
                 else:
                     fmt_2 = (
@@ -1409,7 +1456,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                         "no_warnings": True,
                         "nocheckcertificate": True,
                         "socket_timeout": 60,
-                        "extractor_args": {"youtube": {"player_client": ["android_vr", "web"]}},
+                        "extractor_args": {"youtube": {"player_client": ["android_vr", "visionos"]}},
                     }
                 if node_bin:
                     ydl_opts_2["js_runtimes"] = {"node": {"path": node_bin}}
@@ -1426,7 +1473,7 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     downloaded = True
                     tier_used = 2
             except Exception as e2:
-                print(f"[YouTube DL] Strategy 2 (android) error: {e2}")
+                print(f"[YouTube DL] Strategy 2 (android_vr) error: {e2}")
 
         files = [
             f for f in glob.glob(os.path.join(task_dir, "*"))
@@ -1442,6 +1489,14 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                     return helper_res
             except Exception as e3:
                 print(f"[YouTube DL] Tier 3 helper error: {e3}")
+
+            # If helper failed, cleanup all partial/broken files in task_dir and fail immediately
+            for f in glob.glob(os.path.join(task_dir, "*")):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+            raise ValueError("دانلود فایل از یوتیوب ناموفق بود.")
 
         files = [
             f for f in glob.glob(os.path.join(task_dir, "*"))
@@ -1465,6 +1520,10 @@ def download_youtube_sync(video_id: str, quality: str, task_dir: Optional[str] =
                 final_dur = dur_ff
                 w = w or w_ff
                 h = h or h_ff
+
+        # Strict Integrity Check: Video file must not be 0 bytes
+        if not is_audio and os.path.exists(file_path) and os.path.getsize(file_path) <= 0:
+            raise ValueError("فایل ویدیو ناقص یا آسیب‌دیده است.")
 
         success = True
         return {
