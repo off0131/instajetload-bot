@@ -1028,7 +1028,7 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
             "extract_flat": False,
             "nocheckcertificate": True,
             "socket_timeout": 30,
-            "extractor_args": {"youtube": {"player_client": ["visionos", "android_vr"]}},
+            "extractor_args": {"youtube": {"player_client": ["web", "android", "visionos", "android_vr"]}},
         }
         if node_bin:
             ydl_opts_1["js_runtimes"] = {"node": {"path": node_bin}}
@@ -1188,6 +1188,7 @@ async def get_youtube_info(url: str) -> Dict[str, Any]:
 # ================= COBALT CLOUD STREAMING ENGINE =================
 COBALT_INSTANCES = [
     os.environ.get("COBALT_API_URL", "").rstrip("/"),
+    "https://dwnld.nichind.dev",
     "https://rue-cobalt.xenon.zone",
 ]
 COBALT_INSTANCES = [inst for inst in COBALT_INSTANCES if inst]
@@ -1851,7 +1852,7 @@ def download_youtube_sync(
                     "no_warnings": True,
                     "nocheckcertificate": True,
                     "socket_timeout": 60,
-                    "extractor_args": {"youtube": {"player_client": ["visionos", "android_vr"]}},
+                    "extractor_args": {"youtube": {"player_client": ["web", "android", "visionos", "android_vr"]}},
                 }
             else:
                 fmt_1 = (
@@ -1862,7 +1863,7 @@ def download_youtube_sync(
                     f"bv*[height<={q_int}]+ba/"
                     f"b[height<={q_int}][ext=mp4]/"
                     f"b[height<={q_int}]/"
-                    f"best"
+                    f"18/best"
                 )
                 ydl_opts_1 = {
                     "format": fmt_1,
@@ -1879,7 +1880,7 @@ def download_youtube_sync(
                     "no_warnings": True,
                     "nocheckcertificate": True,
                     "socket_timeout": 60,
-                    "extractor_args": {"youtube": {"player_client": ["visionos", "android_vr"]}},
+                    "extractor_args": {"youtube": {"player_client": ["web", "android", "visionos", "android_vr"]}},
                 }
 
             if node_bin:
@@ -1922,7 +1923,7 @@ def download_youtube_sync(
                         "no_warnings": True,
                         "nocheckcertificate": True,
                         "socket_timeout": 60,
-                        "extractor_args": {"youtube": {"player_client": ["android_vr", "visionos"]}},
+                        "extractor_args": {"youtube": {"player_client": ["android", "web", "android_vr", "visionos"]}},
                     }
                 else:
                     fmt_2 = (
@@ -1948,7 +1949,7 @@ def download_youtube_sync(
                         "no_warnings": True,
                         "nocheckcertificate": True,
                         "socket_timeout": 60,
-                        "extractor_args": {"youtube": {"player_client": ["android_vr", "visionos"]}},
+                        "extractor_args": {"youtube": {"player_client": ["android", "web", "android_vr", "visionos"]}},
                     }
                 if node_bin:
                     ydl_opts_2["js_runtimes"] = {"node": {"path": node_bin}}
