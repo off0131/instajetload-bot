@@ -1411,14 +1411,18 @@ async def download_youtube_via_helper(
                         if p_resp.status == 200:
                             p_data = await p_resp.json(content_type=None)
                             candidate = p_data.get("download_url")
-                            if p_data.get("success") == 1 and candidate:
-                                if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "/ad/b.php", "/ajax/ad/")):
+                            prog_val = p_data.get("progress")
+                            if candidate and (p_data.get("success") == 1 or prog_val == 1000):
+                                if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com", "/ad/")):
                                     print(f"[Helper API] Interim ad redirect on attempt {idx}, continuing to poll: {candidate}")
+                                    continue
+                                if prog_val is not None and int(prog_val) < 1000:
+                                    print(f"[Helper API] Progress {prog_val} < 1000, continuing to poll...")
                                     continue
                                 download_url = candidate
                                 if p_data.get("title"):
                                     raw_title = p_data.get("title")
-                                print(f"[Helper API] Direct download URL ready on attempt {idx}!")
+                                print(f"[Helper API] Direct download URL ready on attempt {idx}: {download_url}")
                                 break
                             elif p_data.get("success") == -1:
                                 print(f"[Helper API] Progress returned -1 (error): {p_data}")
@@ -1455,7 +1459,8 @@ async def download_youtube_via_helper(
                         return None
                     c_type = dl_resp.headers.get("Content-Type", "")
                     if "text/html" in c_type:
-                        print(f"[Helper API] Stream returned HTML ({c_type}), aborting")
+                        html_prev = (await dl_resp.text())[:300]
+                        print(f"[Helper API] Stream returned HTML ({c_type}) for {download_url}: {html_prev}")
                         return None
                     total_len = int(dl_resp.headers.get("Content-Length") or 0)
                     downloaded = 0
@@ -1589,15 +1594,19 @@ def download_youtube_via_helper_sync(
                 if p_resp.status_code == 200:
                     p_data = p_resp.json()
                     candidate = p_data.get("download_url")
-                    if p_data.get("success") == 1 and candidate:
-                        # Reject ad networks immediately
-                        if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "/ad/b.php", "/ajax/ad/")):
+                    prog_val = p_data.get("progress")
+                    if candidate and (p_data.get("success") == 1 or prog_val == 1000):
+                        # Reject ad networks and interim tokens immediately
+                        if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com", "/ad/")):
                             print(f"[Helper API Sync] Interim ad redirect on attempt {idx}, continuing to poll: {candidate}")
+                            continue
+                        if prog_val is not None and int(prog_val) < 1000:
+                            print(f"[Helper API Sync] Progress {prog_val} < 1000, continuing to poll...")
                             continue
                         download_url = candidate
                         if p_data.get("title"):
                             raw_title = p_data.get("title")
-                        print(f"[Helper API Sync] Ready at attempt {idx}!")
+                        print(f"[Helper API Sync] Ready at attempt {idx}: {download_url}")
                         break
                     elif p_data.get("success") == -1:
                         print(f"[Helper API Sync] Progress returned -1: {p_data}")
@@ -1634,7 +1643,8 @@ def download_youtube_via_helper_sync(
                     return None
                 c_type = stream_resp.headers.get("Content-Type", "")
                 if "text/html" in c_type:
-                    print(f"[Helper API Sync] Returned HTML instead of media: {c_type}")
+                    html_prev = stream_resp.text[:300]
+                    print(f"[Helper API Sync] Returned HTML instead of media: {c_type} for {download_url}: {html_prev}")
                     return None
                 total_len = int(stream_resp.headers.get("Content-Length") or 0)
                 downloaded = 0
@@ -1735,8 +1745,10 @@ def get_youtube_direct_cdn_url(video_id: str, quality: str) -> Optional[str]:
                 p_resp = requests.get(progress_url, headers=headers, timeout=8)
                 if p_resp.status_code == 200:
                     p_data = p_resp.json()
-                    if p_data.get("download_url"):
-                        return p_data.get("download_url")
+                    durl = p_data.get("download_url")
+                    if durl and (p_data.get("success") == 1 or p_data.get("progress") == 1000):
+                        if not any(bad in durl for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com", "/ad/")):
+                            return durl
                     elif p_data.get("success") == -1:
                         return None
             except Exception:
