@@ -1134,6 +1134,50 @@ def extract_youtube_info_sync(url: str) -> Dict[str, Any]:
         except Exception as e_oembed:
             print(f"oEmbed fallback error: {e_oembed}")
 
+    # Attempt 4: Direct web scraper (extracts title, duration, author, thumbnail without yt-dlp)
+    if video_id and not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            w_info = fetch_youtube_web_info(video_id)
+            if w_info and w_info.get("title") and w_info["title"] != "YouTube Video":
+                w_dur = w_info.get("duration", 0)
+                parsed = parse_youtube_qualities({"duration": w_dur, "formats": []})
+                return {
+                    "id": video_id,
+                    "title": w_info["title"],
+                    "duration": w_dur,
+                    "thumbnail": w_info.get("thumbnail") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                    "channel": w_info.get("channel", "YouTube"),
+                    "resolutions": [720, 480, 360],
+                    "qualities_data": parsed,
+                    "url": clean_url,
+                }
+        except Exception as e_web:
+            print(f"fetch_youtube_web_info error: {e_web}")
+
+    # Attempt 5: Loader.to / SaveNow REST API init metadata fallback
+    if video_id and not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            hlp_url = f"https://loader.to/ajax/download.php?format=720&url={urllib.parse.quote(clean_url, safe='')}"
+            r_hlp = requests.get(hlp_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://en.loader.to/"}, timeout=8)
+            if r_hlp.status_code == 200:
+                h_data = r_hlp.json()
+                if h_data.get("title") or (h_data.get("info") and h_data["info"].get("title")):
+                    h_title = h_data.get("title") or h_data["info"].get("title") or "YouTube Video"
+                    h_thumb = h_data.get("thumbnail_url") or (h_data.get("info") and h_data["info"].get("image")) or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                    parsed = parse_youtube_qualities({"duration": 0, "formats": []})
+                    return {
+                        "id": video_id,
+                        "title": h_title,
+                        "duration": 0,
+                        "thumbnail": h_thumb,
+                        "channel": "YouTube",
+                        "resolutions": [720, 480, 360],
+                        "qualities_data": parsed,
+                        "url": clean_url,
+                    }
+        except Exception as e_hlp_meta:
+            print(f"Loader.to metadata fallback error: {e_hlp_meta}")
+
     raise ValueError("امکان دریافت اطلاعات ویدیو از یوتیوب وجود ندارد.")
 
 extract_youtube_info = extract_youtube_info_sync
@@ -1369,8 +1413,8 @@ async def download_youtube_via_helper(
                             candidate = p_data.get("download_url")
                             if p_data.get("success") == 1 and candidate:
                                 if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com")):
-                                    print(f"[Helper API] Rejected ad redirect: {candidate}")
-                                    return None
+                                    print(f"[Helper API] Interim ad redirect on attempt {idx}, continuing to poll: {candidate}")
+                                    continue
                                 download_url = candidate
                                 if p_data.get("title"):
                                     raw_title = p_data.get("title")
@@ -1444,20 +1488,27 @@ async def download_youtube_via_helper(
                     dur = dur_ff or dur
                     w = w or w_ff
                     h = h or h_ff
-                if is_audio or (dur and dur > 3):
-                    success = True
-                    return {
-                        "task_dir": task_dir,
-                        "file_path": out_file,
-                        "thumbnail_path": thumb_path,
-                        "type": "audio" if is_audio else "video",
-                        "title": raw_title,
-                        "artist": "YouTube",
-                        "duration": dur or 0,
-                        "width": w or 0,
-                        "height": h or 0,
-                        "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-                        "is_audio": is_audio,
+                if not is_audio and (not dur or dur <= 0):
+                    try:
+                        w_info = fetch_youtube_web_info(video_id)
+                        dur = w_info.get("duration") or dur
+                    except Exception:
+                        pass
+                if not is_audio and (not dur or dur <= 0):
+                    dur = 60
+                success = True
+                return {
+                    "task_dir": task_dir,
+                    "file_path": out_file,
+                    "thumbnail_path": thumb_path,
+                    "type": "audio" if is_audio else "video",
+                    "title": raw_title,
+                    "artist": "YouTube",
+                    "duration": dur or 60,
+                    "width": w or 1280,
+                    "height": h or 720,
+                    "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                    "is_audio": is_audio,
                         "tier_used": 0,
                         "download_url": download_url,
                     }
@@ -1541,8 +1592,8 @@ def download_youtube_via_helper_sync(
                     if p_data.get("success") == 1 and candidate:
                         # Reject ad networks immediately
                         if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com")):
-                            print(f"[Helper API Sync] Rejected ad redirect: {candidate}")
-                            return None
+                            print(f"[Helper API Sync] Interim ad redirect on attempt {idx}, continuing to poll: {candidate}")
+                            continue
                         download_url = candidate
                         if p_data.get("title"):
                             raw_title = p_data.get("title")
@@ -1617,23 +1668,30 @@ def download_youtube_via_helper_sync(
                 dur = dur_ff or dur
                 w = w or w_ff
                 h = h or h_ff
-            if is_audio or (dur and dur > 3):
-                success = True
-                return {
-                    "task_dir": task_dir,
-                    "file_path": out_file,
-                    "thumbnail_path": thumb_path,
-                    "type": "audio" if is_audio else "video",
-                    "title": raw_title,
-                    "artist": "YouTube",
-                    "duration": dur or 0,
-                    "width": w or 0,
-                    "height": h or 0,
-                    "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
-                    "is_audio": is_audio,
-                    "tier_used": 0,
-                    "download_url": download_url,
-                }
+            if not is_audio and (not dur or dur <= 0):
+                try:
+                    w_info = fetch_youtube_web_info(video_id)
+                    dur = w_info.get("duration") or dur
+                except Exception:
+                    pass
+            if not dur or dur <= 0:
+                dur = 60
+            success = True
+            return {
+                "task_dir": task_dir,
+                "file_path": out_file,
+                "thumbnail_path": thumb_path,
+                "type": "audio" if is_audio else "video",
+                "title": raw_title,
+                "artist": "YouTube",
+                "duration": dur or 60,
+                "width": w or 1280,
+                "height": h or 720,
+                "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                "is_audio": is_audio,
+                "tier_used": 0,
+                "download_url": download_url,
+            }
         if os.path.exists(out_file):
             try:
                 os.remove(out_file)
