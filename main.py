@@ -54,6 +54,7 @@ from downloader import (
     get_youtube_direct_cdn_url,
     get_media_dimensions,
     probe_with_ffmpeg,
+    split_video_for_telegram,
 )
 from mtproto_uploader import send_mtproto_video, send_mtproto_audio
 
@@ -945,6 +946,89 @@ async def handle_youtube_callback(callback: types.CallbackQuery):
                             return
                     except Exception as e_mt:
                         logger.error(f"MTProto direct upload failed: {e_mt}", exc_info=True)
+                elif not is_audio:
+                    # Video exceeds 2,000 MB: auto-split into streamable parts and deliver directly to Telegram!
+                    try:
+                        logger.info(f"Video size {file_size_mb:.1f} MB exceeds 2GB. Auto-splitting into streamable parts...")
+                        raw_title = res.get("title", "YouTube Video")
+                        short_title = (raw_title[:40] + "...") if len(raw_title) > 42 else raw_title
+                        await status_msg.edit_text(
+                            f"✂️ <b>حجم ویدیو ({file_size_mb:.1f} مگابایت) بیشتر از سقف مجاز تلگرام (۲ گیگابایت) است.</b>\n\n"
+                            f"🎬 <code>{html.escape(short_title)}</code>\n\n"
+                            "🔄 <b>در حال تقسیم هوشمند به بخش‌های مجزا و ارسال مستقیم به تلگرام...</b>"
+                        )
+                        parts = await asyncio.to_thread(split_video_for_telegram, file_path, 1850.0, dur_val)
+                        if parts and len(parts) > 1:
+                            all_parts_sent = True
+                            for p_info in parts:
+                                p_num = p_info["part_num"]
+                                p_total = p_info["total_parts"]
+                                p_path = p_info["file_path"]
+                                p_thumb = p_info.get("thumbnail_path") or thumb_file
+                                p_dur = p_info.get("duration") or 0
+                                p_w = p_info.get("width") or width_val
+                                p_h = p_info.get("height") or height_val
+                                p_sz = p_info.get("size_mb") or (os.path.getsize(p_path) / (1024 * 1024))
+
+                                part_caption = format_caption(
+                                    f"🎬 {raw_title}\n"
+                                    f"📌 <b>قسمت {p_num} از {p_total}</b> (حجم: {p_sz:.1f} مگابایت)"
+                                )
+                                p_prog_cb = make_upload_progress_callback(
+                                    status_msg,
+                                    prefix=f"🚀 <b>در حال ارسال قسمت {p_num} از {p_total} به تلگرام...</b>\n🎬 <code>{html.escape(short_title)}</code>"
+                                )
+                                p_sent = await send_mtproto_video(
+                                    chat_id=callback.message.chat.id,
+                                    file_path=p_path,
+                                    caption=part_caption,
+                                    duration=p_dur,
+                                    width=p_w,
+                                    height=p_h,
+                                    thumb=p_thumb,
+                                    progress_callback=p_prog_cb,
+                                )
+                                if not p_sent:
+                                    logger.error(f"Failed to upload part {p_num}/{p_total}")
+                                    all_parts_sent = False
+                                    break
+
+                            if all_parts_sent:
+                                if callback.from_user:
+                                    await log_download(callback.from_user.id, cache_key)
+
+                                token = secrets.token_urlsafe(16)
+                                filename = os.path.basename(file_path)
+                                DIRECT_DOWNLOADS[token] = {
+                                    "file_path": file_path,
+                                    "filename": filename,
+                                    "title": raw_title,
+                                    "size_mb": file_size_mb,
+                                    "quality": f"{quality}p",
+                                    "task_dir": task_dir,
+                                    "created_at": time.time(),
+                                }
+                                task_dir = None
+
+                                server_url = get_server_base_url()
+                                page_url = f"{server_url}/dl/{token}"
+                                stream_url = f"{server_url}/file/{token}/video.mp4"
+
+                                final_text = (
+                                    f"✅ <b>تمام {len(parts)} قسمت ویدیو با موفقیت ارسال شد!</b>\n\n"
+                                    f"🎬 <b>عنوان:</b> {html.escape(raw_title)}\n"
+                                    f"💾 <b>حجم کل:</b> {file_size_mb:.1f} مگابایت ({len(parts)} بخش)\n\n"
+                                    "💡 <i>همچنین در صورت تمایل به دانلود نسخه یکپارچه و بدون تقطیع:</i>"
+                                )
+                                reply_markup = InlineKeyboardMarkup(inline_keyboard=[
+                                    [InlineKeyboardButton(text=f"🌐 صفحه دانلود فایل کامل ({file_size_mb:.1f} MB)", url=page_url)],
+                                    [InlineKeyboardButton(text="📥 لینک مستقیم (مرورگر / ADM)", url=stream_url)]
+                                ])
+                                await callback.message.reply(final_text, reply_markup=reply_markup)
+                                await status_msg.delete()
+                                return
+                    except Exception as e_split:
+                        logger.error(f"Auto-split for large video failed: {e_split}", exc_info=True)
 
                 # Fallback to direct web link if > 2GB or if MTProto encountered an error
                 token = secrets.token_urlsafe(16)
@@ -1252,42 +1336,96 @@ async def process_generic_url(message: types.Message, url: str, platform: str):
             file_path = res.get("file_path", "")
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024) if (file_path and os.path.exists(file_path)) else 0
 
-            if file_size_mb > 49.5 and file_size_mb <= 2000.0:
-                try:
-                    logger.info(f"Delivering large generic media directly via MTProto ({file_size_mb:.1f} MB)")
-                    raw_title = res.get("title", "Media")
-                    short_title = (raw_title[:45] + "...") if len(raw_title) > 48 else raw_title
-                    prog_cb = make_upload_progress_callback(
-                        status_msg,
-                        prefix=f"🚀 <b>در حال ارسال مستقیم به تلگرام...</b>\n🎬 <code>{html.escape(short_title)}</code>"
-                    )
-                    if m_type == "audio":
-                        sent_ok = await send_mtproto_audio(
-                            chat_id=message.chat.id,
-                            file_path=file_path,
-                            caption=format_caption(f"🎵 {res.get('title', '')}"),
-                            title=res.get("title", "Audio"),
-                            performer=res.get("artist") or p_name,
-                            duration=res.get("duration") or 0,
-                            progress_callback=prog_cb,
+            if file_size_mb > 49.5:
+                if file_size_mb <= 2000.0:
+                    try:
+                        logger.info(f"Delivering large generic media directly via MTProto ({file_size_mb:.1f} MB)")
+                        raw_title = res.get("title", "Media")
+                        short_title = (raw_title[:45] + "...") if len(raw_title) > 48 else raw_title
+                        prog_cb = make_upload_progress_callback(
+                            status_msg,
+                            prefix=f"🚀 <b>در حال ارسال مستقیم به تلگرام...</b>\n🎬 <code>{html.escape(short_title)}</code>"
                         )
-                    else:
-                        sent_ok = await send_mtproto_video(
-                            chat_id=message.chat.id,
-                            file_path=file_path,
-                            caption=format_caption(res.get("title", "")),
-                            duration=res.get("duration") or 0,
-                            width=res.get("width") or 0,
-                            height=res.get("height") or 0,
-                            progress_callback=prog_cb,
+                        if m_type == "audio":
+                            sent_ok = await send_mtproto_audio(
+                                chat_id=message.chat.id,
+                                file_path=file_path,
+                                caption=format_caption(f"🎵 {res.get('title', '')}"),
+                                title=res.get("title", "Audio"),
+                                performer=res.get("artist") or p_name,
+                                duration=res.get("duration") or 0,
+                                progress_callback=prog_cb,
+                            )
+                        else:
+                            sent_ok = await send_mtproto_video(
+                                chat_id=message.chat.id,
+                                file_path=file_path,
+                                caption=format_caption(res.get("title", "")),
+                                duration=res.get("duration") or 0,
+                                width=res.get("width") or 0,
+                                height=res.get("height") or 0,
+                                progress_callback=prog_cb,
+                            )
+                        if sent_ok:
+                            if message.from_user:
+                                await log_download(message.from_user.id, platform)
+                            await status_msg.delete()
+                            return
+                    except Exception as e_gen_mt:
+                        logger.error(f"Generic MTProto upload error: {e_gen_mt}", exc_info=True)
+                elif m_type != "audio":
+                    # Generic video > 2GB -> Auto-split and deliver via MTProto
+                    try:
+                        logger.info(f"Generic video {file_size_mb:.1f} MB exceeds 2GB. Auto-splitting...")
+                        raw_title = res.get("title", p_name)
+                        short_title = (raw_title[:40] + "...") if len(raw_title) > 42 else raw_title
+                        await status_msg.edit_text(
+                            f"✂️ <b>حجم ویدیو ({file_size_mb:.1f} مگابایت) بیشتر از سقف مجاز تلگرام (۲ گیگابایت) است.</b>\n\n"
+                            f"🎬 <code>{html.escape(short_title)}</code>\n\n"
+                            "🔄 <b>در حال تقسیم هوشمند به بخش‌های مجزا و ارسال مستقیم به تلگرام...</b>"
                         )
-                    if sent_ok:
-                        if message.from_user:
-                            await log_download(message.from_user.id, platform)
-                        await status_msg.delete()
-                        return
-                except Exception as e_gen_mt:
-                    logger.error(f"Generic MTProto upload error: {e_gen_mt}", exc_info=True)
+                        parts = await asyncio.to_thread(split_video_for_telegram, file_path, 1850.0, res.get("duration") or 0)
+                        if parts and len(parts) > 1:
+                            all_parts_sent = True
+                            for p_info in parts:
+                                p_num = p_info["part_num"]
+                                p_total = p_info["total_parts"]
+                                p_path = p_info["file_path"]
+                                p_thumb = p_info.get("thumbnail_path")
+                                p_dur = p_info.get("duration") or 0
+                                p_w = p_info.get("width") or res.get("width") or 0
+                                p_h = p_info.get("height") or res.get("height") or 0
+                                p_sz = p_info.get("size_mb") or (os.path.getsize(p_path) / (1024 * 1024))
+
+                                part_caption = format_caption(
+                                    f"🎬 {raw_title}\n"
+                                    f"📌 <b>قسمت {p_num} از {p_total}</b> (حجم: {p_sz:.1f} مگابایت)"
+                                )
+                                p_prog_cb = make_upload_progress_callback(
+                                    status_msg,
+                                    prefix=f"🚀 <b>در حال ارسال قسمت {p_num} از {p_total} به تلگرام...</b>\n🎬 <code>{html.escape(short_title)}</code>"
+                                )
+                                p_sent = await send_mtproto_video(
+                                    chat_id=message.chat.id,
+                                    file_path=p_path,
+                                    caption=part_caption,
+                                    duration=p_dur,
+                                    width=p_w,
+                                    height=p_h,
+                                    thumb=p_thumb,
+                                    progress_callback=p_prog_cb,
+                                )
+                                if not p_sent:
+                                    all_parts_sent = False
+                                    break
+
+                            if all_parts_sent:
+                                if message.from_user:
+                                    await log_download(message.from_user.id, platform)
+                                await status_msg.delete()
+                                return
+                    except Exception as e_split_gen:
+                        logger.error(f"Generic video auto-split error: {e_split_gen}", exc_info=True)
 
             if m_type == "audio":
                 await safe_reply_audio(

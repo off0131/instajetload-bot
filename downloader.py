@@ -1,4 +1,5 @@
 import os
+import math
 import shutil
 import uuid
 import asyncio
@@ -746,6 +747,106 @@ def prepare_video_for_streaming(file_path: str) -> tuple[str, Optional[str]]:
     real_thumb = thumb_path if (os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0) else None
     return file_path, real_thumb
 
+
+def split_video_for_telegram(
+    file_path: str,
+    max_part_size_mb: float = 1850.0,
+    total_duration: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Splits video files exceeding Telegram's 2,000 MB (2 GB) upload limit into 
+    fully-playable, progressive MP4 segments under max_part_size_mb using 
+    zero-reencode ffmpeg stream-copy (-c copy -avoid_negative_ts make_zero -movflags +faststart).
+    
+    Each part is optimized with:
+    - Independent +faststart progressive MP4 container (moov atom at byte 0)
+    - High-quality 320px thumbnail
+    - Exact duration, width, and height metadata
+    - supports_streaming=True compatibility
+    """
+    if not file_path or not os.path.exists(file_path):
+        return []
+
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    w, h, probed_dur = probe_with_ffmpeg(file_path)
+    dur = total_duration or probed_dur or 0
+    if dur <= 0:
+        w_chk, h_chk, dur_chk = get_media_dimensions(file_path)
+        w = w or w_chk or 1280
+        h = h or h_chk or 720
+        dur = dur_chk or dur or 0
+
+    if file_size_mb <= max_part_size_mb:
+        return [{
+            "file_path": file_path,
+            "thumbnail_path": None,
+            "duration": int(round(dur)),
+            "width": w or 1280,
+            "height": h or 720,
+            "part_num": 1,
+            "total_parts": 1,
+            "size_mb": file_size_mb,
+        }]
+
+    target_part_size_mb = 1850.0 if max_part_size_mb > 1850.0 else max_part_size_mb
+    num_parts = max(2, math.ceil(file_size_mb / target_part_size_mb))
+    part_dur = (dur / num_parts) if dur > 0 else 0
+    task_dir = os.path.dirname(file_path)
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    ff_bin = get_ffmpeg_bin() or "ffmpeg"
+
+    parts: List[Dict[str, Any]] = []
+    for i in range(num_parts):
+        start_sec = i * part_dur
+        dur_sec = part_dur if i < num_parts - 1 else (dur - start_sec)
+        part_file = os.path.join(task_dir, f"{base_name}_part{i+1}.mp4")
+        cmd = [
+            ff_bin, "-y",
+            "-ss", f"{start_sec:.2f}",
+            "-i", file_path,
+            "-t", f"{dur_sec:.2f}",
+            "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
+            part_file,
+        ]
+        try:
+            res = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=180,
+            )
+            if res.returncode == 0 and os.path.exists(part_file) and os.path.getsize(part_file) > 1024:
+                part_file, p_thumb = prepare_video_for_streaming(part_file)
+                pw, ph, pd = probe_with_ffmpeg(part_file)
+                parts.append({
+                    "file_path": part_file,
+                    "thumbnail_path": p_thumb,
+                    "duration": int(round(pd or dur_sec)),
+                    "width": pw or w or 1280,
+                    "height": ph or h or 720,
+                    "part_num": i + 1,
+                    "total_parts": num_parts,
+                    "size_mb": os.path.getsize(part_file) / (1024 * 1024),
+                })
+        except Exception as e_cut:
+            print(f"Error splitting part {i+1}: {e_cut}")
+
+    if not parts:
+        return [{
+            "file_path": file_path,
+            "thumbnail_path": None,
+            "duration": int(round(dur)),
+            "width": w or 1280,
+            "height": h or 720,
+            "part_num": 1,
+            "total_parts": 1,
+            "size_mb": file_size_mb,
+        }]
+
+    return parts
+
 # ================= MULTI-PLATFORM DOWNLOADERS =================
 
 # YouTube client configurations to bypass datacenter IP blocks (e.g. Render, AWS, GCP)
@@ -825,8 +926,10 @@ def parse_youtube_qualities(info: Dict[str, Any]) -> Dict[str, Any]:
     duration = int(info.get("duration") or 0)
     formats = info.get("formats", []) or []
 
-    target_resolutions = [1080, 720, 480, 360, 240, 144]
+    target_resolutions = [2160, 1440, 1080, 720, 480, 360, 240, 144]
     bitrates = {
+        2160: 12000 + 192,
+        1440: 6000 + 192,
         1080: 2500 + 128,
         720: 1500 + 128,
         480: 800 + 128,
@@ -869,7 +972,7 @@ def parse_youtube_qualities(info: Dict[str, Any]) -> Dict[str, Any]:
 
     video_quals = []
     for tr in target_resolutions:
-        if heights and tr > max_height and tr > 720:
+        if tr > max_height and tr > 720:
             continue
 
         matching_v = [f for f in formats if f.get("height") == tr and f.get("vcodec") != "none"]
@@ -886,7 +989,14 @@ def parse_youtube_qualities(info: Dict[str, Any]) -> Dict[str, Any]:
             kbps = bitrates.get(tr, 800)
             sz = int(duration * kbps * 1000 / 8)
 
-        lbl = f"{tr}p · {to_persian_label(sz)}" if sz else f"{tr}p"
+        if tr == 2160:
+            tag = "2160p (4K)"
+        elif tr == 1440:
+            tag = "1440p (2K)"
+        else:
+            tag = f"{tr}p"
+
+        lbl = f"{tag} · {to_persian_label(sz)}" if sz else tag
         video_quals.append({
             "res": tr,
             "size_bytes": sz,
@@ -1124,8 +1234,8 @@ def download_via_cobalt_sync(
                     except Exception:
                         pass
                 return None
-            with open(out_file, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=131072):
+            with open(out_file, "wb", buffering=4*1024*1024) as f:
+                for chunk in resp.iter_content(chunk_size=1048576):
                     if chunk:
                         f.write(chunk)
 
@@ -1206,7 +1316,14 @@ async def download_youtube_via_helper(
         created_task_dir = False
 
     is_audio = quality in ("audio", "audio_low", "mp3")
-    fmt = "mp3" if is_audio else (quality if quality in ["144", "240", "360", "480", "720", "1080"] else "720")
+    if is_audio:
+        fmt = "mp3"
+    elif quality in ("2160", "4k"):
+        fmt = "4k"
+    elif quality in ["144", "240", "360", "480", "720", "1080", "1440"]:
+        fmt = quality
+    else:
+        fmt = "720"
     target_url = f"https://www.youtube.com/watch?v={video_id}"
     req_url = f"https://loader.to/ajax/download.php?button=1&start=1&end=1&format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
     headers = {
@@ -1240,10 +1357,11 @@ async def download_youtube_via_helper(
                 print("[Helper API] No progress_url available, aborting helper")
                 return None
 
-            # Poll progress endpoint (up to 90 seconds)
+            # Poll progress endpoint (up to 100 attempts / ~180-200 seconds)
             download_url = None
-            for idx in range(45):
-                await asyncio.sleep(2)
+            for idx in range(100):
+                wait_time = 1.0 if idx < 5 else (1.5 if idx < 20 else 2.0)
+                await asyncio.sleep(wait_time)
                 try:
                     async with session.get(progress_url, timeout=aiohttp.ClientTimeout(total=10)) as p_resp:
                         if p_resp.status == 200:
@@ -1261,6 +1379,13 @@ async def download_youtube_via_helper(
                             elif p_data.get("success") == -1:
                                 print(f"[Helper API] Progress returned -1 (error): {p_data}")
                                 return None
+                            else:
+                                conv_prog = p_data.get("progress")
+                                if conv_prog and progress_callback:
+                                    try:
+                                        progress_callback(int(conv_prog), 1000)
+                                    except Exception:
+                                        pass
                 except Exception as e_poll:
                     if idx % 5 == 0:
                         print(f"[Helper API] Polling attempt {idx} warning: {e_poll}")
@@ -1275,7 +1400,7 @@ async def download_youtube_via_helper(
 
             try:
                 print(f"[Helper API] Starting stream download into {out_file}...")
-                async with session.get(download_url, timeout=aiohttp.ClientTimeout(total=1800, sock_read=60)) as dl_resp:
+                async with session.get(download_url, timeout=aiohttp.ClientTimeout(total=3600, sock_read=90)) as dl_resp:
                     print(f"[Helper API] Stream response HTTP {dl_resp.status}, length: {dl_resp.headers.get('Content-Length')}")
                     if dl_resp.status != 200:
                         if os.path.exists(out_file):
@@ -1290,8 +1415,8 @@ async def download_youtube_via_helper(
                         return None
                     total_len = int(dl_resp.headers.get("Content-Length") or 0)
                     downloaded = 0
-                    with open(out_file, "wb") as f:
-                        while chunk := await dl_resp.content.read(131072):
+                    with open(out_file, "wb", buffering=4*1024*1024) as f:
+                        while chunk := await dl_resp.content.read(1048576):
                             f.write(chunk)
                             downloaded += len(chunk)
                             if progress_callback:
@@ -1366,7 +1491,14 @@ def download_youtube_via_helper_sync(
         created_task_dir = False
 
     is_audio = quality in ("audio", "audio_low", "mp3")
-    fmt = "mp3" if is_audio else (quality if quality in ["144", "240", "360", "480", "720", "1080"] else "720")
+    if is_audio:
+        fmt = "mp3"
+    elif quality in ("2160", "4k"):
+        fmt = "4k"
+    elif quality in ["144", "240", "360", "480", "720", "1080", "1440"]:
+        fmt = quality
+    else:
+        fmt = "720"
     target_url = f"https://www.youtube.com/watch?v={video_id}"
     req_url = f"https://loader.to/ajax/download.php?button=1&start=1&end=1&format={fmt}&url={urllib.parse.quote(target_url, safe='')}"
     headers = {
@@ -1398,8 +1530,9 @@ def download_youtube_via_helper_sync(
             return None
 
         download_url = None
-        for idx in range(45):
-            time.sleep(2)
+        for idx in range(100):
+            wait_time = 1.0 if idx < 5 else (1.5 if idx < 20 else 2.0)
+            time.sleep(wait_time)
             try:
                 p_resp = requests.get(progress_url, headers=headers, timeout=10)
                 if p_resp.status_code == 200:
@@ -1418,6 +1551,13 @@ def download_youtube_via_helper_sync(
                     elif p_data.get("success") == -1:
                         print(f"[Helper API Sync] Progress returned -1: {p_data}")
                         return None
+                    else:
+                        conv_prog = p_data.get("progress")
+                        if conv_prog and progress_callback:
+                            try:
+                                progress_callback(int(conv_prog), 1000)
+                            except Exception:
+                                pass
             except Exception as e_poll:
                 if idx % 5 == 0:
                     print(f"[Helper API Sync] Poll attempt {idx} warning: {e_poll}")
@@ -1432,7 +1572,7 @@ def download_youtube_via_helper_sync(
 
         try:
             print(f"[Helper API Sync] Downloading stream into {out_file}...")
-            with requests.get(download_url, headers=headers, stream=True, timeout=(20, 1800)) as stream_resp:
+            with requests.get(download_url, headers=headers, stream=True, timeout=(30, 3600)) as stream_resp:
                 print(f"[Helper API Sync] Stream HTTP {stream_resp.status_code}, length: {stream_resp.headers.get('Content-Length')}")
                 if stream_resp.status_code != 200:
                     if os.path.exists(out_file):

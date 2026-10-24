@@ -518,6 +518,86 @@ class TestFixesAndMTProto(unittest.TestCase):
                 )
                 self.assertIsNone(res)
 
+    def test_main_imports_split_video_for_telegram(self):
+        """Verify split_video_for_telegram is imported and callable in main."""
+        self.assertTrue(hasattr(main, "split_video_for_telegram"))
+        self.assertTrue(callable(main.split_video_for_telegram))
+
+    def test_split_video_for_telegram_single_part_under_limit(self):
+        """Verify video under limit returns a single part dictionary without splitting."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            f.write(b"0" * 10000)
+            tmp_path = f.name
+        try:
+            with patch("downloader.probe_with_ffmpeg", return_value=(1280, 720, 60)):
+                parts = downloader.split_video_for_telegram(tmp_path, max_part_size_mb=1850.0, total_duration=60)
+                self.assertEqual(len(parts), 1)
+                self.assertEqual(parts[0]["part_num"], 1)
+                self.assertEqual(parts[0]["total_parts"], 1)
+                self.assertEqual(parts[0]["duration"], 60)
+                self.assertEqual(parts[0]["file_path"], tmp_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def test_split_video_for_telegram_splits_large_video(self):
+        """Verify video exceeding limit invokes ffmpeg to split into parts under limit."""
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+            # Fake 200 KB file with max limit set to 0.08 MB (80 KB)
+            f.write(b"0" * 200000)
+            tmp_path = f.name
+        try:
+            mock_sub_run = MagicMock()
+            mock_sub_run.return_value = MagicMock(returncode=0)
+
+            def fake_run(cmd, *args, **kwargs):
+                # When ffmpeg creates part file, write dummy bytes
+                out_target = cmd[-1]
+                with open(out_target, "wb") as pf:
+                    pf.write(b"PART_DATA" * 500)
+                return MagicMock(returncode=0)
+
+            with patch("downloader.probe_with_ffmpeg", return_value=(1920, 1080, 120)), \
+                 patch("downloader.subprocess.run", side_effect=fake_run), \
+                 patch("downloader.prepare_video_for_streaming", side_effect=lambda p: (p, "/fake/thumb.jpg")):
+                
+                parts = downloader.split_video_for_telegram(tmp_path, max_part_size_mb=0.08, total_duration=120)
+                self.assertGreater(len(parts), 1)
+                self.assertEqual(parts[0]["part_num"], 1)
+                self.assertEqual(parts[0]["total_parts"], len(parts))
+                for p in parts:
+                    self.assertTrue(os.path.exists(p["file_path"]))
+                    # Cleanup generated part files
+                    if os.path.exists(p["file_path"]) and p["file_path"] != tmp_path:
+                        try:
+                            os.remove(p["file_path"])
+                        except Exception:
+                            pass
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def test_parse_youtube_qualities_4k_and_2k_when_present(self):
+        """Verify 2160p (4K) and 1440p (2K) appear when source formats include 4K/2K."""
+        info = {
+            "duration": 3600,
+            "formats": [
+                {"height": 2160, "vcodec": "avc1", "filesize": 4000 * 1024 * 1024},
+                {"height": 1440, "vcodec": "avc1", "filesize": 2500 * 1024 * 1024},
+                {"height": 1080, "vcodec": "avc1", "filesize": 1500 * 1024 * 1024},
+                {"height": 720, "vcodec": "avc1", "filesize": 900 * 1024 * 1024},
+            ]
+        }
+        parsed = downloader.parse_youtube_qualities(info)
+        quals = {q["res"]: q["label"] for q in parsed["video_qualities"]}
+        self.assertIn(2160, quals)
+        self.assertIn("2160p (4K)", quals[2160])
+        self.assertIn("۴٫", quals[2160])
+        self.assertIn(1440, quals)
+        self.assertIn("1440p (2K)", quals[1440])
+        self.assertIn(1080, quals)
+        self.assertIn(720, quals)
+
 
 if __name__ == "__main__":
     unittest.main()
