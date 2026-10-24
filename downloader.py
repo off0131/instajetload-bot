@@ -1412,7 +1412,7 @@ async def download_youtube_via_helper(
                             p_data = await p_resp.json(content_type=None)
                             candidate = p_data.get("download_url")
                             if p_data.get("success") == 1 and candidate:
-                                if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com")):
+                                if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "/ad/b.php", "/ajax/ad/")):
                                     print(f"[Helper API] Interim ad redirect on attempt {idx}, continuing to poll: {candidate}")
                                     continue
                                 download_url = candidate
@@ -1591,7 +1591,7 @@ def download_youtube_via_helper_sync(
                     candidate = p_data.get("download_url")
                     if p_data.get("success") == 1 and candidate:
                         # Reject ad networks immediately
-                        if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "affadaffa.com")):
+                        if any(bad in candidate for bad in ("ey43.com", "hoofsdute.com", "/ad/b.php", "/ajax/ad/")):
                             print(f"[Helper API Sync] Interim ad redirect on attempt {idx}, continuing to poll: {candidate}")
                             continue
                         download_url = candidate
